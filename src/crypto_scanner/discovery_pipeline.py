@@ -16,7 +16,6 @@ from crypto_scanner.discovery import (
 )
 from crypto_scanner.technical import TechnicalDataError, closed_candles
 
-
 _DISCOVERY_INTERVALS = {"5": 5, "15": 15, "60": 60}
 
 
