@@ -81,11 +81,19 @@ def parse_orderbook_update(message: dict[str, Any]) -> OrderBookUpdate | None:
             for row in rows
         )
 
+    update_id_raw = data.get("u")
+    if update_id_raw is None:
+        raise BybitPublicWebSocketError("orderbook message missing update id")
     sequence_raw = data.get("seq")
+    engine_timestamp_raw = message.get("cts")
     return OrderBookUpdate(
         symbol=str(data["s"]),
         update_type=str(message.get("type", "")),
         timestamp_ms=int(message.get("ts", 0)),
+        engine_timestamp_ms=(
+            int(engine_timestamp_raw) if engine_timestamp_raw is not None else None
+        ),
+        update_id=int(update_id_raw),
         sequence=int(sequence_raw) if sequence_raw is not None else None,
         bids=parse_levels(data.get("b"), "bid"),
         asks=parse_levels(data.get("a"), "ask"),
