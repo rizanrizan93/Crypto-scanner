@@ -32,9 +32,9 @@ jobs:
 
           echo "runner_ip_region_hint_from_metadata is not authoritative; GitHub log shows Azure region separately."
           probe "Bybit Testnet" "https://api-testnet.bybit.com/v5/market/time"
-          probe "Binance Futures Testnet" "https://testnet.binancefuture.com/fapi/v1/ping"
-          probe "Binance Futures Testnet ExchangeInfo" "https://testnet.binancefuture.com/fapi/v1/exchangeInfo"
+          probe "Binance Futures Demo" "https://demo-fapi.binance.com/fapi/v1/ping"
+          probe "Binance Futures Demo ExchangeInfo" "https://demo-fapi.binance.com/fapi/v1/exchangeInfo"
+          probe "Binance Futures Legacy Testnet" "https://testnet.binancefuture.com/fapi/v1/ping"
           probe "OKX public/demo REST" "https://openapi.okx.com/api/v5/public/time"
           probe "Bitget public REST" "https://api.bitget.com/api/v2/public/time"
           probe "Bitget futures ticker" "https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=BTCUSDT"
-          probe "Kraken Futures demo" "https://demo-futures.kraken.com/derivatives/api/v3/tickers"
