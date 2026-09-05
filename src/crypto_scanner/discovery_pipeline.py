@@ -5,8 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
-from crypto_scanner.bybit.models import Candle, OpenInterestPoint
-from crypto_scanner.bybit.public_rest import BybitPublicApiError, BybitPublicRestClient
+from crypto_scanner.binance.models import Candle, OpenInterestPoint
+from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient, BinancePublicApiError
 from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.discovery import (
     CryptoNativeEvidence,
@@ -46,7 +46,7 @@ class DiscoveryRun:
 class DiscoveryPipeline:
     def __init__(
         self,
-        public_client: BybitPublicRestClient,
+        public_client: BinanceDemoPublicRestClient,
         *,
         universe: tuple[str, ...] = DEFAULT_UNIVERSE,
         time_source_ms: Callable[[], int] | None = None,
@@ -75,12 +75,9 @@ class DiscoveryPipeline:
                     microstructure.get(symbol, MicrostructureSnapshot()),
                     now_ms=started_at_ms,
                 )
-            except (BybitPublicApiError, TechnicalDataError, ValueError) as exc:
+            except (BinancePublicApiError, TechnicalDataError, ValueError) as exc:
                 failures.append(
-                    SymbolScanFailure(
-                        symbol=symbol,
-                        reason=f"{type(exc).__name__}: {exc}",
-                    )
+                    SymbolScanFailure(symbol=symbol, reason=f"{type(exc).__name__}: {exc}")
                 )
                 continue
             results.append(result)
@@ -102,14 +99,9 @@ class DiscoveryPipeline:
     ) -> DiscoveryResult:
         ticker = self._public_client.get_ticker(symbol)
         candle_sets: dict[str, tuple[Candle, ...]] = {}
-
         for interval, interval_minutes in _DISCOVERY_INTERVALS.items():
             raw = self._public_client.get_klines(symbol, interval, limit=220)
-            closed = closed_candles(
-                raw,
-                interval_minutes=interval_minutes,
-                now_ms=now_ms,
-            )
+            closed = closed_candles(raw, interval_minutes=interval_minutes, now_ms=now_ms)
             self._assert_fresh_closed_candle(
                 symbol,
                 interval,
@@ -125,7 +117,6 @@ class DiscoveryPipeline:
             limit=2,
         )
         oi_change = self._open_interest_change(oi_points)
-
         native = CryptoNativeEvidence(
             spread_bps=ticker.spread_bps,
             funding_rate=ticker.funding_rate,
@@ -145,24 +136,16 @@ class DiscoveryPipeline:
         now_ms: int,
     ) -> None:
         if len(candles) < 100:
-            raise TechnicalDataError(
-                f"{symbol} {interval}m has only {len(candles)} closed candles"
-            )
+            raise TechnicalDataError(f"{symbol} {interval}m has only {len(candles)} closed candles")
         interval_ms = interval_minutes * 60_000
         last_close_ms = candles[-1].start_time_ms + interval_ms
         if now_ms - last_close_ms > interval_ms * 2:
-            raise TechnicalDataError(
-                f"{symbol} {interval}m latest closed candle is stale"
-            )
+            raise TechnicalDataError(f"{symbol} {interval}m latest closed candle is stale")
         if last_close_ms > now_ms:
-            raise TechnicalDataError(
-                f"{symbol} {interval}m includes an unfinished candle"
-            )
+            raise TechnicalDataError(f"{symbol} {interval}m includes an unfinished candle")
 
     @staticmethod
-    def _open_interest_change(
-        points: tuple[OpenInterestPoint, ...],
-    ) -> Decimal | None:
+    def _open_interest_change(points: tuple[OpenInterestPoint, ...]) -> Decimal | None:
         if len(points) < 2:
             return None
         previous = points[-2].open_interest

@@ -5,31 +5,30 @@ import platform
 import socket
 from typing import Any
 
-from crypto_scanner.bybit.auth import BybitTestnetCredentials
-from crypto_scanner.bybit.private_rest import BybitPrivateReadOnlyClient
-from crypto_scanner.bybit.public_rest import BybitPublicRestClient
+from crypto_scanner.binance.auth import BinanceDemoCredentials
+from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient
+from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.execution_plan import TestnetExecutionArm
 
 
 class RuntimePreflightError(RuntimeError):
-    """Raised when the operational Testnet host is not safe to arm."""
+    """Raised when the Binance Futures Demo runtime is not safe to arm."""
 
 
 def run_runtime_preflight() -> dict[str, Any]:
     config = load_runtime_config()
     config.validate()
-
     arm = TestnetExecutionArm.from_environment()
     if arm.enabled:
         raise RuntimePreflightError(
             "preflight requires CRYPTO_SCANNER_TESTNET_EXECUTION to remain DISABLED"
         )
 
-    credentials = BybitTestnetCredentials.from_environment()
+    credentials = BinanceDemoCredentials.from_environment()
     report: dict[str, Any] = {
-        "venue": "BYBIT",
-        "environment": "TESTNET",
+        "venue": "BINANCE",
+        "environment": "DEMO",
         "live_trading_locked": config.safety.live_trading_locked,
         "testnet_execution_armed": False,
         "hostname": socket.gethostname(),
@@ -38,7 +37,7 @@ def run_runtime_preflight() -> dict[str, Any]:
     }
 
     public_symbols: dict[str, object] = {}
-    with BybitPublicRestClient(base_url=config.bybit_rest_url) as public:
+    with BinanceDemoPublicRestClient(base_url=config.binance_rest_url) as public:
         for symbol in config.universe:
             instrument = public.get_instrument(symbol)
             ticker = public.get_ticker(symbol)
@@ -61,18 +60,13 @@ def run_runtime_preflight() -> dict[str, Any]:
             }
     report["public_symbols"] = public_symbols
 
-    with BybitPrivateReadOnlyClient(
-        credentials,
-        base_url=config.bybit_rest_url,
-    ) as private:
+    with BinanceDemoPrivateReadOnlyClient(credentials, base_url=config.binance_rest_url) as private:
         wallet = private.get_wallet_balance()
         positions = private.get_positions()
         orders = private.get_open_orders()
 
-    if wallet.account_type != "UNIFIED":
-        raise RuntimePreflightError("Bybit account is not UNIFIED")
     if wallet.total_equity is None or wallet.total_equity <= 0:
-        raise RuntimePreflightError("Bybit Testnet equity is missing or non-positive")
+        raise RuntimePreflightError("Binance Futures Demo equity is missing or non-positive")
 
     report["private_account"] = {
         "account_type": wallet.account_type,
@@ -83,12 +77,9 @@ def run_runtime_preflight() -> dict[str, Any]:
             else None
         ),
         "open_positions": [
-            {
-                "symbol": position.symbol,
-                "side": position.side,
-                "size": str(position.size),
-            }
-            for position in positions
+            {"symbol": p.symbol, "side": p.side, "size": str(p.size)}
+            for p in positions
+            if p.is_open
         ],
         "open_orders": [
             {

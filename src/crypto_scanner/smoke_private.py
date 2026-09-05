@@ -3,20 +3,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from crypto_scanner.bybit.auth import BybitTestnetCredentials
-from crypto_scanner.bybit.private_rest import BybitPrivateReadOnlyClient
+from crypto_scanner.binance.auth import BinanceDemoCredentials
+from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient
 
 
 def build_readonly_report() -> dict[str, Any]:
-    credentials = BybitTestnetCredentials.from_environment()
-    with BybitPrivateReadOnlyClient(credentials) as client:
-        wallet = client.get_wallet_balance(coin="USDT")
-        positions = client.get_positions(settle_coin="USDT")
-        orders = client.get_open_orders(settle_coin="USDT")
+    credentials = BinanceDemoCredentials.from_environment()
+    with BinanceDemoPrivateReadOnlyClient(credentials) as client:
+        wallet = client.get_wallet_balance()
+        positions = client.get_positions()
+        orders = client.get_open_orders()
 
     return {
-        "venue": "BYBIT",
-        "environment": "TESTNET",
+        "venue": "BINANCE",
+        "environment": "DEMO",
         "mode": "PRIVATE_READ_ONLY",
         "wallet": {
             "account_type": wallet.account_type,
@@ -41,6 +41,7 @@ def build_readonly_report() -> dict[str, Any]:
                 "mark_price": str(position.mark_price) if position.mark_price is not None else None,
             }
             for position in positions
+            if position.is_open
         ],
         "open_orders": [
             {
