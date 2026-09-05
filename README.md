@@ -13,7 +13,7 @@ This repository is independent from:
 
 It must not share runtime state, databases, secrets, positions, scoring, calibration, or execution state with those projects. Proven engineering patterns may be reused only as patterns.
 
-## Phase 0 safety contract
+## Safety contract
 
 Current venue and execution scope:
 
@@ -38,6 +38,30 @@ Initial universe:
 - SOLUSDT
 - XRPUSDT
 - BNBUSDT
+
+## Phase 1 public market data
+
+The public Bybit Testnet layer requires no API key and currently provides:
+
+- exact instrument metadata: tick size, quantity step, minimum order quantity, notional and leverage metadata
+- ticker snapshot: last/mark/index price, best bid/ask, 24h volume/turnover, open interest and funding
+- OHLCV intervals used by the scanner: 1m, 3m, 5m, 15m, 1h and 4h
+- open-interest history
+- funding-rate history
+- WebSocket ticker stream
+- WebSocket public trade stream with taker Buy/Sell side
+- WebSocket orderbook depth 50 with snapshot/delta reconstruction
+- fail-closed local book validation for stale updates and crossed/locked books
+
+Numeric exchange values are parsed as `Decimal`, not binary floating point, so later sizing and price rounding can use exact exchange metadata.
+
+Public connectivity smoke test:
+
+```bash
+crypto-scanner-public-smoke --websocket-seconds 12
+```
+
+The repository also includes a GitHub Actions `Bybit Public Smoke` workflow. It verifies the Testnet REST path and live public WebSocket without any secret.
 
 ## Planned architecture
 
@@ -73,7 +97,7 @@ ruff check .
 pytest
 ```
 
-No API key is required for Phase 0 CI.
+No API key is required for Phase 0 or Phase 1 public connectivity.
 
 ## Secrets
 
