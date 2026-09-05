@@ -181,25 +181,27 @@ class BinanceDemoPublicRestClient:
         interval_time: str = "5min",
         limit: int = 50,
     ) -> tuple[OpenInterestPoint, ...]:
+        """Return the truthful current OI snapshot available on Futures Testnet.
+
+        Binance's historical `/futures/data/openInterestHist` surface redirects to the
+        Demo UI on this test environment. We therefore do not manufacture history.
+        A cross-run OI delta can be derived later from durable sampled snapshots.
+        """
         if interval_time not in _OI_PERIODS:
             raise ValueError(f"unsupported open interest interval: {interval_time}")
         if not 1 <= limit <= 500:
             raise ValueError("open interest limit must be between 1 and 500")
-        rows = self._get(
-            "/futures/data/openInterestHist",
-            {"symbol": symbol.upper(), "period": _OI_PERIODS[interval_time], "limit": limit},
-        )
-        if not isinstance(rows, list):
-            raise BinancePublicApiError("open-interest response must be a JSON array")
-        points = [
+        symbol = symbol.upper()
+        oi = self._get("/fapi/v1/openInterest", {"symbol": symbol})
+        server_time = self._get("/fapi/v1/time")
+        if not isinstance(oi, dict) or not isinstance(server_time, dict):
+            raise BinancePublicApiError("current open-interest response must be JSON objects")
+        return (
             OpenInterestPoint(
-                timestamp_ms=int(item["timestamp"]),
-                open_interest=decimal_required(item.get("sumOpenInterest"), "sumOpenInterest"),
-            )
-            for item in rows
-        ]
-        points.sort(key=lambda point: point.timestamp_ms)
-        return tuple(points)
+                timestamp_ms=int(server_time["serverTime"]),
+                open_interest=decimal_required(oi.get("openInterest"), "openInterest"),
+            ),
+        )
 
     def get_funding_history(self, symbol: str, *, limit: int = 50) -> tuple[FundingRatePoint, ...]:
         if not 1 <= limit <= 1000:
