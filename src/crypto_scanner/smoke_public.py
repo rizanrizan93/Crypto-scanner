@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from typing import Any
 
-from crypto_scanner.bybit.public_rest import BybitPublicRestClient
+from crypto_scanner.bybit.public_rest import (
+    BybitAccessForbiddenError,
+    BybitPublicRestClient,
+)
 from crypto_scanner.bybit.public_ws import BybitPublicWebSocket, parse_orderbook_update
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.market_state import LocalOrderBook
@@ -99,9 +103,32 @@ async def run_websocket_smoke(seconds: float) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Smoke-test Bybit Testnet public market data")
     parser.add_argument("--websocket-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--allow-forbidden-hosted-runner",
+        action="store_true",
+        help="Allow HTTP 403 only when running under GitHub Actions; other failures remain fatal.",
+    )
     args = parser.parse_args()
 
-    report = run_rest_smoke()
+    try:
+        report = run_rest_smoke()
+    except BybitAccessForbiddenError as exc:
+        hosted_runner_override = (
+            args.allow_forbidden_hosted_runner and os.getenv("GITHUB_ACTIONS") == "true"
+        )
+        if not hosted_runner_override:
+            raise
+        diagnostic = {
+            "venue": "BYBIT",
+            "environment": "TESTNET",
+            "status": "ACCESS_FORBIDDEN",
+            "scope": "GITHUB_HOSTED_RUNNER_DIAGNOSTIC_ONLY",
+            "reason": str(exc),
+        }
+        print(f"::warning::{exc}")
+        print(json.dumps(diagnostic, indent=2, sort_keys=True))
+        return
+
     report["websocket"] = asyncio.run(run_websocket_smoke(args.websocket_seconds))
     print(json.dumps(report, indent=2, sort_keys=True))
 
