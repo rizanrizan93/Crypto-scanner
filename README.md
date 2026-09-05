@@ -61,9 +61,34 @@ Public connectivity smoke test:
 crypto-scanner-public-smoke --websocket-seconds 12
 ```
 
-The repository also includes a GitHub Actions `Bybit Public Smoke` workflow. GitHub-hosted runners may execute from a location whose source IP is rejected by Bybit with HTTP 403. The smoke command classifies that condition separately when the workflow passes the explicit `--allow-forbidden-hosted-runner` diagnostic flag. That exception is accepted only when `GITHUB_ACTIONS=true`; it is not available to the operational scanner runtime. Any other HTTP, schema, WebSocket, data-quality, or orderbook failure remains fatal.
+GitHub-hosted runners may execute from a location whose source IP is rejected by Bybit with HTTP 403. The public smoke workflow classifies that specific hosted-runner condition as a diagnostic warning. Other HTTP, schema, WebSocket, data-quality, or orderbook failures remain fatal.
 
-A successful GitHub unit/CI run therefore proves the code contract, but it is not a substitute for venue-connectivity validation from the eventual permitted operational runtime host. The 24/7 scanner/execution engine must run from infrastructure that is eligible to access Bybit under the account's jurisdiction and Bybit terms; GitHub Actions remains CI/deployment tooling rather than the trading daemon.
+A successful GitHub unit/CI run proves the code contract but is not a substitute for venue-connectivity validation from the eventual permitted operational runtime host. The 24/7 scanner/execution engine must run from infrastructure eligible to access Bybit under the account's jurisdiction and Bybit terms; GitHub Actions remains CI/deployment tooling rather than the trading daemon.
+
+## Phase 2 private account reads
+
+Phase 2 is deliberately **read-only by construction**. The private gateway exposes only authenticated GET access to:
+
+- Unified wallet balance
+- USDT linear positions
+- USDT linear open orders
+
+The internal signed-request allowlist contains only these three paths. Unknown private paths are rejected before any network request. There are no create, amend, cancel, leverage-change, or other trading mutation methods in the Phase 2 client.
+
+Authentication follows the Bybit V5 HMAC-SHA256 GET contract using one deterministic query string for both signature generation and transmission. Credentials are loaded only from:
+
+- `BYBIT_TESTNET_API_KEY`
+- `BYBIT_TESTNET_API_SECRET`
+
+The credential dataclass suppresses both values from its representation. Missing credentials fail closed. Production endpoint overrides remain forbidden.
+
+Once credentials are configured on an eligible operational host, the read-only smoke command is:
+
+```bash
+crypto-scanner-private-readonly-smoke
+```
+
+It prints balance, open positions, and open-order state but never prints credentials. Because GitHub-hosted runners can be source-IP blocked by Bybit, authenticated venue validation should be performed by the eventual permitted runtime rather than treated as a GitHub-hosted CI gate.
 
 ## Planned architecture
 
@@ -99,12 +124,14 @@ ruff check .
 pytest
 ```
 
-No API key is required for Phase 0 or Phase 1 public connectivity.
+No API key is required for Phase 0 or Phase 1. Phase 2 unit tests use mocked credentials and never require real secrets.
 
 ## Secrets
 
-Never commit secrets. Future Testnet private connectivity will use GitHub Secrets. Expected names are deliberately not required yet; they will be finalized in Phase 2.
+Never commit secrets. During Phase 2, the only external secrets expected are the two **Bybit Testnet** credentials named above. Do not add LIVE/Mainnet credentials to this repository or its runtime configuration.
+
+Supabase secrets are not required while persistence is deferred.
 
 ## Database
 
-Bybit remains authoritative for exchange state. A dedicated Supabase project will later be used for durable scanner evidence, trajectories, closed trades, audit history, and calibration. Supabase is not required for Phase 0 or public Phase 1 work.
+Bybit remains authoritative for exchange state. A dedicated Supabase project will later be used for durable scanner evidence, trajectories, closed trades, audit history, and calibration. Supabase is not required for Phases 0–2 code development.
