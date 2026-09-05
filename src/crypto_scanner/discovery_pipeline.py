@@ -9,10 +9,10 @@ from crypto_scanner.bybit.models import Candle, OpenInterestPoint
 from crypto_scanner.bybit.public_rest import BybitPublicApiError, BybitPublicRestClient
 from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.discovery import (
-    CryptoNativeEvidence,
-    DiscoveryResult,
     analyze_symbol,
     apply_market_context,
+    CryptoNativeEvidence,
+    DiscoveryResult,
 )
 from crypto_scanner.technical import TechnicalDataError, closed_candles
 
