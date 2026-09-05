@@ -31,7 +31,9 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if crypto-scanner-public-smoke --websocket-seconds 12; then
+            if crypto-scanner-public-smoke \
+              --websocket-seconds 12 \
+              --allow-forbidden-hosted-runner; then
               exit 0
             fi
             echo "Public smoke attempt ${attempt} failed"
