@@ -90,6 +90,57 @@ crypto-scanner-private-readonly-smoke
 
 It prints balance, open positions, and open-order state but never prints credentials. Because GitHub-hosted runners can be source-IP blocked by Bybit, authenticated venue validation should be performed by the eventual permitted runtime rather than treated as a GitHub-hosted CI gate.
 
+## Phase 3 technical discovery scanner
+
+Phase 3 is a **ranking/admission layer only**. It cannot create entries, set stop losses, calculate executable position size, submit orders, or mark anything `EXECUTION_READY`.
+
+Discovery currently uses closed-candle evidence from:
+
+- 5m — local tactical structure
+- 15m — primary discovery structure
+- 1h — higher-timeframe confirmation
+
+The analysis engine includes:
+
+- EMA20 / EMA50
+- RSI14
+- ATR14 and ATR expansion
+- ADX14
+- normalized price momentum
+- confirmed swing highs/lows
+- HH/HL and LH/LL structural bias
+- BOS / CHOCH classification
+- regime classification: `TREND`, `RANGE`, `EXPANSION`, `HIGH_VOLATILITY_CHAOTIC`
+- spread
+- funding rate
+- open-interest change
+- optional orderbook imbalance
+- optional taker pressure
+- BTC + ETH directional market-context overlay for altcoins
+
+Missing optional evidence never receives a positive placeholder score. Candidate admission requires directional score separation, acceptable spread, non-chaotic higher-timeframe regime, and minimum evidence coverage. A stale or malformed symbol is quarantined as a scan failure and cannot become a candidate.
+
+Statuses are intentionally limited to:
+
+- `CANDIDATE`
+- `WATCH`
+- `NO_TRADE`
+
+Run the read-only discovery command from an eligible Bybit Testnet-capable host:
+
+```bash
+crypto-scanner-discovery
+```
+
+The command explicitly reports:
+
+```text
+execution_ready = false
+orders_enabled = false
+```
+
+Phase 4 will separately build fresh entry geometry and execution-readiness guards. A high Phase 3 score is therefore never sufficient to trade.
+
 ## Planned architecture
 
 1. **Discovery lane** — universe scan, regime/context, ranking, deeper analysis, candidate creation.
@@ -124,7 +175,7 @@ ruff check .
 pytest
 ```
 
-No API key is required for Phase 0 or Phase 1. Phase 2 unit tests use mocked credentials and never require real secrets.
+No API key is required for Phase 0, Phase 1 public access, or Phase 3 unit tests. Phase 2 unit tests use mocked credentials and never require real secrets.
 
 ## Secrets
 
@@ -134,4 +185,4 @@ Supabase secrets are not required while persistence is deferred.
 
 ## Database
 
-Bybit remains authoritative for exchange state. A dedicated Supabase project will later be used for durable scanner evidence, trajectories, closed trades, audit history, and calibration. Supabase is not required for Phases 0–2 code development.
+Bybit remains authoritative for exchange state. A dedicated Supabase project will later be used for durable scanner evidence, trajectories, closed trades, audit history, and calibration. Supabase is not required for Phases 0–3 code development.
