@@ -120,6 +120,8 @@ class OrderBookUpdate:
     symbol: str
     update_type: str
     timestamp_ms: int
+    engine_timestamp_ms: int | None
+    update_id: int
     sequence: int | None
     bids: tuple[OrderBookLevel, ...]
     asks: tuple[OrderBookLevel, ...]
