@@ -3,8 +3,12 @@ from __future__ import annotations
 from decimal import Decimal
 
 import httpx
+import pytest
 
-from crypto_scanner.bybit.public_rest import BybitPublicRestClient
+from crypto_scanner.bybit.public_rest import (
+    BybitAccessForbiddenError,
+    BybitPublicRestClient,
+)
 
 
 def _response(request: httpx.Request, result: dict[str, object]) -> httpx.Response:
@@ -142,3 +146,13 @@ def test_open_interest_and_funding_are_sorted() -> None:
 
     assert [point.timestamp_ms for point in oi] == [1000, 2000]
     assert [point.timestamp_ms for point in funding] == [1000, 2000]
+
+
+def test_http_403_is_classified_as_access_forbidden() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, request=request, text="Forbidden")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        client = BybitPublicRestClient(client=http_client)
+        with pytest.raises(BybitAccessForbiddenError, match="HTTP 403"):
+            client.get_instrument("BTCUSDT")
