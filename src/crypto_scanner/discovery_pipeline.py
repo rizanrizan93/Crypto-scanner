@@ -6,10 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from crypto_scanner.bybit.models import Candle, OpenInterestPoint
-from crypto_scanner.bybit.public_rest import (
-    BybitPublicApiError,
-    BybitPublicRestClient,
-)
+from crypto_scanner.bybit.public_rest import BybitPublicApiError, BybitPublicRestClient
 from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.discovery import (
     CryptoNativeEvidence,
