@@ -38,10 +38,7 @@ def encode_query(params: dict[str, object]) -> str:
         value = params[key]
         if value is None:
             continue
-        if isinstance(value, bool):
-            encoded_value = "true" if value else "false"
-        else:
-            encoded_value = str(value)
+        encoded_value = ("true" if value else "false") if isinstance(value, bool) else str(value)
         pairs.append((key, encoded_value))
     return urlencode(pairs)
 
