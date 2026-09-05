@@ -171,9 +171,12 @@ def _score_frame(frame: FrameAnalysis, direction: TradeDirection) -> Decimal:
         else:
             score += Decimal(6)
 
-    if bullish and Decimal(50) <= frame.rsi14 <= Decimal(72):
-        score += Decimal(10)
-    elif not bullish and Decimal(28) <= frame.rsi14 <= Decimal(50):
+    rsi_aligned = (
+        bullish and Decimal(50) <= frame.rsi14 <= Decimal(72)
+    ) or (
+        not bullish and Decimal(28) <= frame.rsi14 <= Decimal(50)
+    )
+    if rsi_aligned:
         score += Decimal(10)
 
     if aligned_structure and frame.regime.adx14 >= Decimal(20):
