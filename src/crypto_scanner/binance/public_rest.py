@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -69,7 +68,12 @@ class BinanceDemoPublicRestClient:
         response = self._client.get(url, params=params or {})
         response.raise_for_status()
         payload = response.json()
-        if isinstance(payload, dict) and isinstance(payload.get("code"), int) and payload["code"] < 0:
+        is_error_payload = (
+            isinstance(payload, dict)
+            and isinstance(payload.get("code"), int)
+            and payload["code"] < 0
+        )
+        if is_error_payload:
             raise BinancePublicApiError(
                 f"Binance public API error code={payload.get('code')} msg={payload.get('msg')}"
             )
@@ -85,7 +89,11 @@ class BinanceDemoPublicRestClient:
 
     def get_instrument(self, symbol: str) -> InstrumentInfo:
         symbol = symbol.upper()
-        items = [item for item in self._exchange_info().get("symbols", []) if item.get("symbol") == symbol]
+        items = [
+            item
+            for item in self._exchange_info().get("symbols", [])
+            if item.get("symbol") == symbol
+        ]
         if len(items) != 1:
             raise BinancePublicApiError(f"expected one instrument for {symbol}, got {len(items)}")
         item = items[0]

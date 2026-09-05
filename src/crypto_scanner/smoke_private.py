@@ -22,7 +22,9 @@ def build_readonly_report() -> dict[str, Any]:
             "account_type": wallet.account_type,
             "total_equity": str(wallet.total_equity) if wallet.total_equity is not None else None,
             "total_wallet_balance": (
-                str(wallet.total_wallet_balance) if wallet.total_wallet_balance is not None else None
+                str(wallet.total_wallet_balance)
+                if wallet.total_wallet_balance is not None
+                else None
             ),
             "total_available_balance": (
                 str(wallet.total_available_balance)

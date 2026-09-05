@@ -49,7 +49,9 @@ class SafetyContract:
         if self.venue is not Venue.BINANCE:
             raise SafetyError("active Crypto Scanner venue is Binance Futures Demo only")
         if self.environment is not ExecutionEnvironment.TESTNET:
-            raise SafetyError("LIVE is hard locked; non-live execution is the only allowed environment")
+            raise SafetyError(
+                "LIVE is hard locked; non-live execution is the only allowed environment"
+            )
         if self.live_trading_locked is not True:
             raise SafetyError("live_trading_locked must remain true")
         if not 0 < self.max_risk_per_trade <= 0.01:
@@ -69,7 +71,9 @@ def assert_testnet_url(url: str) -> str:
     if host in _BYBIT_FORBIDDEN_HOSTS:
         raise SafetyError(f"production Bybit endpoint forbidden: {host}")
     if host not in {"api-testnet.bybit.com", "stream-testnet.bybit.com"}:
-        raise SafetyError(f"unapproved Bybit Testnet endpoint forbidden: {host or '<missing-host>'}")
+        raise SafetyError(
+            f"unapproved Bybit Testnet endpoint forbidden: {host or '<missing-host>'}"
+        )
     if parsed.scheme not in {"https", "wss"}:
         raise SafetyError(f"insecure or unsupported scheme forbidden: {parsed.scheme}")
     return url
