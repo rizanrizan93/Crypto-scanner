@@ -6,7 +6,12 @@ from enum import StrEnum
 
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
-from crypto_scanner.structure import StructuralBias, StructureEvent, StructureState, analyze_structure
+from crypto_scanner.structure import (
+    StructuralBias,
+    StructureEvent,
+    StructureState,
+    analyze_structure,
+)
 from crypto_scanner.technical import atr, ema, validate_candles
 
 
@@ -89,7 +94,11 @@ def _choose_mode(
             if distance <= atr3 * Decimal("0.80"):
                 return EntryMode.MOMENTUM_CONTINUATION, reference, breakout
             raise GeometryError("long quote is chasing too far above breakout")
-        if structure.bias is StructuralBias.BULLISH and current_price <= ema20 + atr3 * Decimal("0.30"):
+        valid_pullback = (
+            structure.bias is StructuralBias.BULLISH
+            and current_price <= ema20 + atr3 * Decimal("0.30")
+        )
+        if valid_pullback:
             return EntryMode.HL_PULLBACK, reference, None
         raise GeometryError("long structure does not have a valid pullback or continuation")
 
@@ -104,7 +113,11 @@ def _choose_mode(
         if distance <= atr3 * Decimal("0.80"):
             return EntryMode.MOMENTUM_CONTINUATION, reference, breakout
         raise GeometryError("short quote is chasing too far below breakout")
-    if structure.bias is StructuralBias.BEARISH and current_price >= ema20 - atr3 * Decimal("0.30"):
+    valid_pullback = (
+        structure.bias is StructuralBias.BEARISH
+        and current_price >= ema20 - atr3 * Decimal("0.30")
+    )
+    if valid_pullback:
         return EntryMode.LH_PULLBACK, reference, None
     raise GeometryError("short structure does not have a valid pullback or continuation")
 
