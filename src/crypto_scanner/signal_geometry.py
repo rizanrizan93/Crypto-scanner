@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
-from crypto_scanner.structure import StructuralBias, StructureEvent, analyze_structure
+from crypto_scanner.structure import StructuralBias, StructureEvent, StructureState, analyze_structure
 from crypto_scanner.technical import atr, ema, validate_candles
 
 
@@ -109,6 +109,49 @@ def _choose_mode(
     raise GeometryError("short structure does not have a valid pullback or continuation")
 
 
+def _structural_targets(
+    direction: TradeDirection,
+    structure: StructureState,
+    entry: Decimal,
+    tick_size: Decimal,
+) -> tuple[Decimal, Decimal]:
+    if direction is TradeDirection.LONG:
+        liquidity = sorted({point.price for point in structure.recent_highs if point.price > entry})
+        if not liquidity:
+            raise GeometryError("no bullish liquidity target above entry")
+        tp1 = liquidity[0]
+        if len(liquidity) >= 2:
+            tp2 = liquidity[1]
+        else:
+            structural_range = structure.last_swing_high - structure.last_swing_low
+            if structural_range <= 0:
+                raise GeometryError("invalid bullish structure range")
+            tp2 = tp1 + structural_range
+        return (
+            _round_price(tp1, tick_size, up=False),
+            _round_price(tp2, tick_size, up=False),
+        )
+
+    liquidity = sorted(
+        {point.price for point in structure.recent_lows if point.price < entry},
+        reverse=True,
+    )
+    if not liquidity:
+        raise GeometryError("no bearish liquidity target below entry")
+    tp1 = liquidity[0]
+    if len(liquidity) >= 2:
+        tp2 = liquidity[1]
+    else:
+        structural_range = structure.last_swing_high - structure.last_swing_low
+        if structural_range <= 0:
+            raise GeometryError("invalid bearish structure range")
+        tp2 = tp1 - structural_range
+    return (
+        _round_price(tp1, tick_size, up=True),
+        _round_price(tp2, tick_size, up=True),
+    )
+
+
 def build_signal_geometry(
     candidate: DiscoveryResult,
     *,
@@ -154,24 +197,29 @@ def build_signal_geometry(
         risk = entry - stop
         if risk <= 0:
             raise GeometryError("LONG stop is not below entry")
-        tp1 = _round_price(entry + risk * Decimal("1.5"), instrument.tick_size, up=False)
-        tp2 = _round_price(entry + risk * Decimal("2.5"), instrument.tick_size, up=False)
         chase = max(Decimal(0), entry - (breakout_level or entry)) / atr3
     else:
         stop = _round_price(reference_swing + stop_buffer, instrument.tick_size, up=True)
         risk = stop - entry
         if risk <= 0:
             raise GeometryError("SHORT stop is not above entry")
-        tp1 = _round_price(entry - risk * Decimal("1.5"), instrument.tick_size, up=True)
-        tp2 = _round_price(entry - risk * Decimal("2.5"), instrument.tick_size, up=True)
         chase = max(Decimal(0), (breakout_level or entry) - entry) / atr3
 
     if risk < instrument.tick_size * Decimal(3):
         raise GeometryError("initial risk is too small relative to tick size")
+
+    tp1, tp2 = _structural_targets(
+        direction,
+        structure5,
+        entry,
+        instrument.tick_size,
+    )
     rr1 = abs(tp1 - entry) / risk
     rr2 = abs(tp2 - entry) / risk
-    if rr1 < Decimal("1.45") or rr2 < Decimal("2.40"):
-        raise GeometryError("rounded targets do not preserve minimum RR")
+    if rr1 < Decimal("1.20"):
+        raise GeometryError("nearest structural TP has poor reward/risk")
+    if rr2 < Decimal("2.00"):
+        raise GeometryError("secondary structural TP has poor reward/risk")
 
     return SignalGeometry(
         symbol=symbol,
