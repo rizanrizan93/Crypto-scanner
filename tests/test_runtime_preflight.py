@@ -4,9 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from crypto_scanner.bybit.auth import BybitTestnetCredentials
-from crypto_scanner.bybit.models import InstrumentInfo, TickerSnapshot
-from crypto_scanner.bybit.private_models import WalletSnapshot
+from crypto_scanner.binance.auth import BinanceDemoCredentials
+from crypto_scanner.binance.models import InstrumentInfo, TickerSnapshot, WalletSnapshot
 from crypto_scanner.execution_plan import TestnetExecutionArm
 from crypto_scanner.runtime_preflight import RuntimePreflightError, run_runtime_preflight
 
@@ -20,11 +19,10 @@ def test_preflight_rejects_armed_runtime_before_credentials(monkeypatch) -> None
         classmethod(lambda cls: TestnetExecutionArm(True)),
     )
     monkeypatch.setattr(
-        module.BybitTestnetCredentials,
+        module.BinanceDemoCredentials,
         "from_environment",
         classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("credentials touched"))),
     )
-
     with pytest.raises(RuntimePreflightError, match="DISABLED"):
         run_runtime_preflight()
 
@@ -43,7 +41,7 @@ class _PublicClient:
         return InstrumentInfo(
             symbol=symbol,
             status="Trading",
-            contract_type="LinearPerpetual",
+            contract_type="PERPETUAL",
             base_coin=symbol.removesuffix("USDT"),
             quote_coin="USDT",
             settle_coin="USDT",
@@ -53,9 +51,9 @@ class _PublicClient:
             min_notional_value=Decimal("5"),
             max_order_qty=Decimal("100"),
             max_market_order_qty=Decimal("50"),
-            min_leverage=Decimal("1"),
-            max_leverage=Decimal("100"),
-            leverage_step=Decimal("0.01"),
+            min_leverage=None,
+            max_leverage=None,
+            leverage_step=None,
         )
 
     def get_ticker(self, symbol: str) -> TickerSnapshot:
@@ -71,7 +69,7 @@ class _PublicClient:
             volume_24h=Decimal("1000"),
             turnover_24h=Decimal("100000"),
             open_interest=Decimal("500"),
-            open_interest_value=Decimal("50000"),
+            open_interest_value=None,
             funding_rate=Decimal("0.0001"),
             next_funding_time_ms=None,
         )
@@ -89,7 +87,7 @@ class _PrivateClient:
 
     def get_wallet_balance(self) -> WalletSnapshot:
         return WalletSnapshot(
-            account_type="UNIFIED",
+            account_type="FUTURES_DEMO",
             total_equity=Decimal("1000"),
             total_wallet_balance=Decimal("1000"),
             total_margin_balance=Decimal("1000"),
@@ -114,15 +112,15 @@ def test_preflight_passes_only_disarmed_public_and_private_reads(monkeypatch) ->
         classmethod(lambda cls: TestnetExecutionArm(False)),
     )
     monkeypatch.setattr(
-        module.BybitTestnetCredentials,
+        module.BinanceDemoCredentials,
         "from_environment",
-        classmethod(lambda cls: BybitTestnetCredentials("key", "secret")),
+        classmethod(lambda cls: BinanceDemoCredentials("key", "secret")),
     )
-    monkeypatch.setattr(module, "BybitPublicRestClient", _PublicClient)
-    monkeypatch.setattr(module, "BybitPrivateReadOnlyClient", _PrivateClient)
-
+    monkeypatch.setattr(module, "BinanceDemoPublicRestClient", _PublicClient)
+    monkeypatch.setattr(module, "BinanceDemoPrivateReadOnlyClient", _PrivateClient)
     report = run_runtime_preflight()
-
+    assert report["venue"] == "BINANCE"
+    assert report["environment"] == "DEMO"
     assert report["preflight_status"] == "PASS_DISARMED"
     assert report["testnet_execution_armed"] is False
     assert report["private_account"]["total_equity"] == "1000"

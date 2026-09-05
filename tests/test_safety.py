@@ -1,10 +1,19 @@
 import pytest
 
-from crypto_scanner.safety import SafetyContract, SafetyError, assert_testnet_url
+from crypto_scanner.safety import (
+    SafetyContract,
+    SafetyError,
+    Venue,
+    assert_binance_demo_url,
+    assert_testnet_url,
+)
 
 
-def test_default_safety_contract_is_valid() -> None:
-    SafetyContract().validate()
+def test_default_safety_contract_is_binance_demo_and_valid() -> None:
+    contract = SafetyContract()
+    contract.validate()
+    assert contract.venue is Venue.BINANCE
+    assert contract.live_trading_locked is True
 
 
 def test_risk_above_one_percent_fails_closed() -> None:
@@ -22,21 +31,21 @@ def test_excessive_leverage_fails_closed() -> None:
         SafetyContract(max_leverage=4).validate()
 
 
-def test_live_bybit_rest_endpoint_is_forbidden() -> None:
+def test_live_binance_rest_endpoint_is_forbidden() -> None:
+    with pytest.raises(SafetyError):
+        assert_binance_demo_url("https://fapi.binance.com")
+
+
+def test_binance_demo_endpoint_is_allowed() -> None:
+    assert_binance_demo_url("https://demo-fapi.binance.com/fapi/v1/ping")
+
+
+def test_unknown_binance_endpoint_is_forbidden() -> None:
+    with pytest.raises(SafetyError):
+        assert_binance_demo_url("https://example.com")
+
+
+def test_legacy_bybit_testnet_guard_remains_fail_closed() -> None:
     with pytest.raises(SafetyError):
         assert_testnet_url("https://api.bybit.com")
-
-
-def test_live_bybit_websocket_endpoint_is_forbidden() -> None:
-    with pytest.raises(SafetyError):
-        assert_testnet_url("wss://stream.bybit.com/v5/public/linear")
-
-
-def test_unknown_endpoint_is_forbidden() -> None:
-    with pytest.raises(SafetyError):
-        assert_testnet_url("https://example.com")
-
-
-def test_testnet_endpoints_are_allowed() -> None:
     assert_testnet_url("https://api-testnet.bybit.com")
-    assert_testnet_url("wss://stream-testnet.bybit.com/v5/public/linear")
