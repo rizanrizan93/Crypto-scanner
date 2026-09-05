@@ -1,0 +1,14 @@
+services:
+  crypto-scanner-preflight:
+    build: .
+    restart: "no"
+    env_file:
+      - .env.runtime
+    environment:
+      CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+    command: ["crypto-scanner-runtime-preflight"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
