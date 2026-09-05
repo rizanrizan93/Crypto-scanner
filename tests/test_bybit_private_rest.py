@@ -88,9 +88,8 @@ def test_non_allowlisted_private_path_fails_before_network() -> None:
 
     transport = httpx.MockTransport(handler)
     http_client, client = _client(transport)
-    with http_client:
-        with pytest.raises(BybitReadOnlyViolation):
-            client._signed_get("/v5/private/not-allowed", {})
+    with http_client, pytest.raises(BybitReadOnlyViolation):
+        client._signed_get("/v5/private/not-allowed", {})
     assert calls == 0
 
 
@@ -100,6 +99,5 @@ def test_repeated_cursor_fails_closed() -> None:
 
     transport = httpx.MockTransport(handler)
     http_client, client = _client(transport)
-    with http_client:
-        with pytest.raises(BybitPrivateApiError, match="cursor repeated"):
-            client.get_open_orders()
+    with http_client, pytest.raises(BybitPrivateApiError, match="cursor repeated"):
+        client.get_open_orders()
