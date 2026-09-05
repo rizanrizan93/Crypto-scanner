@@ -155,7 +155,8 @@ class BybitTestnetOrderClient:
             )
         if decoded.get("retCode") != 0:
             raise BybitOrderSubmissionError(
-                f"Bybit order rejected retCode={decoded.get('retCode')} retMsg={decoded.get('retMsg')}"
+                "Bybit order rejected "
+                f"retCode={decoded.get('retCode')} retMsg={decoded.get('retMsg')}"
             )
         result = decoded.get("result")
         if not isinstance(result, dict):
@@ -169,7 +170,8 @@ class BybitTestnetOrderClient:
         if not order_id or returned_link_id != plan.order_link_id:
             raise UnknownSubmissionOutcome(
                 plan.order_link_id,
-                "Bybit acknowledgement identity is incomplete or mismatched; reconcile before retry",
+                "Bybit acknowledgement identity is incomplete or mismatched; "
+                "reconcile before retry",
             )
         exchange_time = decoded.get("time")
         return OrderSubmissionAck(
