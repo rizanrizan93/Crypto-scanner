@@ -61,7 +61,9 @@ Public connectivity smoke test:
 crypto-scanner-public-smoke --websocket-seconds 12
 ```
 
-The repository also includes a GitHub Actions `Bybit Public Smoke` workflow. It verifies the Testnet REST path and live public WebSocket without any secret.
+The repository also includes a GitHub Actions `Bybit Public Smoke` workflow. GitHub-hosted runners may execute from a location whose source IP is rejected by Bybit with HTTP 403. The smoke command classifies that condition separately when the workflow passes the explicit `--allow-forbidden-hosted-runner` diagnostic flag. That exception is accepted only when `GITHUB_ACTIONS=true`; it is not available to the operational scanner runtime. Any other HTTP, schema, WebSocket, data-quality, or orderbook failure remains fatal.
+
+A successful GitHub unit/CI run therefore proves the code contract, but it is not a substitute for venue-connectivity validation from the eventual permitted operational runtime host. The 24/7 scanner/execution engine must run from infrastructure that is eligible to access Bybit under the account's jurisdiction and Bybit terms; GitHub Actions remains CI/deployment tooling rather than the trading daemon.
 
 ## Planned architecture
 
