@@ -21,6 +21,15 @@ class BybitPublicApiError(RuntimeError):
     """Raised when Bybit returns an unsuccessful public API response."""
 
 
+class BybitAccessForbiddenError(BybitPublicApiError):
+    """Raised when Bybit rejects the source with HTTP 403.
+
+    Bybit documents multiple possible 403 causes, including source-IP restrictions and IP-level
+    request controls. Callers must treat this as an environment/access condition, not infer a single
+    cause from the status code alone.
+    """
+
+
 class BybitPublicRestClient:
     def __init__(
         self,
@@ -47,6 +56,12 @@ class BybitPublicRestClient:
         url = f"{self.base_url}{path}"
         assert_testnet_url(url)
         response = self._client.get(url, params=params)
+        if response.status_code == 403:
+            raise BybitAccessForbiddenError(
+                "Bybit Testnet returned HTTP 403. Possible causes include a restricted source IP "
+                "or IP-level request controls; venue connectivity must be verified from the "
+                "intended permitted runtime host."
+            )
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
