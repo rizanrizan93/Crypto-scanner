@@ -1,0 +1,40 @@
+name: Bybit Public Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+
+      - name: Verify Bybit Testnet public REST and WebSocket
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if crypto-scanner-public-smoke --websocket-seconds 12; then
+              exit 0
+            fi
+            echo "Public smoke attempt ${attempt} failed"
+            sleep 5
+          done
+          exit 1
