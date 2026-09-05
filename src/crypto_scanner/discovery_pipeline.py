@@ -5,8 +5,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
-from crypto_scanner.bybit.models import Candle
-from crypto_scanner.bybit.public_rest import BybitPublicApiError, BybitPublicRestClient
+from crypto_scanner.bybit.models import Candle, OpenInterestPoint
+from crypto_scanner.bybit.public_rest import (
+    BybitPublicApiError,
+    BybitPublicRestClient,
+)
 from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.discovery import (
     CryptoNativeEvidence,
@@ -86,11 +89,7 @@ class DiscoveryPipeline:
                 continue
             results.append(result)
 
-        if results:
-            ranked = apply_market_context(tuple(results))
-        else:
-            ranked = ()
-
+        ranked = apply_market_context(tuple(results)) if results else ()
         return DiscoveryRun(
             started_at_ms=started_at_ms,
             completed_at_ms=self._time_source_ms(),
@@ -165,13 +164,13 @@ class DiscoveryPipeline:
             )
 
     @staticmethod
-    def _open_interest_change(points: tuple[object, ...]) -> Decimal | None:
+    def _open_interest_change(
+        points: tuple[OpenInterestPoint, ...],
+    ) -> Decimal | None:
         if len(points) < 2:
             return None
-        previous = getattr(points[-2], "open_interest", None)
-        current = getattr(points[-1], "open_interest", None)
-        if not isinstance(previous, Decimal) or not isinstance(current, Decimal):
-            return None
+        previous = points[-2].open_interest
+        current = points[-1].open_interest
         if previous <= 0 or current < 0:
             return None
         return current / previous - Decimal(1)
