@@ -21,7 +21,9 @@ class ExecutionEnvironment(StrEnum):
 BYBIT_TESTNET_REST_URL = "https://api-testnet.bybit.com"
 BYBIT_TESTNET_PUBLIC_WS_URL = "wss://stream-testnet.bybit.com/v5/public/linear"
 BYBIT_TESTNET_PRIVATE_WS_URL = "wss://stream-testnet.bybit.com/v5/private"
-BINANCE_DEMO_REST_URL = "https://demo-fapi.binance.com"
+# Binance UI calls this environment Futures Demo Trading. The official Binance
+# tooling still exposes the USDⓈ-M API test base at testnet.binancefuture.com.
+BINANCE_DEMO_REST_URL = "https://testnet.binancefuture.com"
 
 _BYBIT_FORBIDDEN_HOSTS = {
     "api.bybit.com",
@@ -80,13 +82,15 @@ def assert_testnet_url(url: str) -> str:
 
 
 def assert_binance_demo_url(url: str) -> str:
-    """Allow only the verified Binance USDⓈ-M Futures Demo REST host."""
+    """Allow only the Binance USDⓈ-M Futures test API host; reject LIVE hosts."""
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if host in _BINANCE_FORBIDDEN_HOSTS:
         raise SafetyError(f"production Binance endpoint forbidden: {host}")
-    if host != "demo-fapi.binance.com":
-        raise SafetyError(f"unapproved Binance Demo endpoint forbidden: {host or '<missing-host>'}")
+    if host != "testnet.binancefuture.com":
+        raise SafetyError(
+            f"unapproved Binance Futures test endpoint forbidden: {host or '<missing-host>'}"
+        )
     if parsed.scheme != "https":
-        raise SafetyError(f"insecure or unsupported Binance Demo scheme forbidden: {parsed.scheme}")
+        raise SafetyError(f"insecure or unsupported Binance test scheme forbidden: {parsed.scheme}")
     return url

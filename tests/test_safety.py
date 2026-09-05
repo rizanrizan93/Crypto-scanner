@@ -36,8 +36,13 @@ def test_live_binance_rest_endpoint_is_forbidden() -> None:
         assert_binance_demo_url("https://fapi.binance.com")
 
 
-def test_binance_demo_endpoint_is_allowed() -> None:
-    assert_binance_demo_url("https://demo-fapi.binance.com/fapi/v1/ping")
+def test_binance_futures_testnet_endpoint_is_allowed() -> None:
+    assert_binance_demo_url("https://testnet.binancefuture.com/fapi/v1/ping")
+
+
+def test_region_unstable_demo_host_is_not_runtime_allowlisted() -> None:
+    with pytest.raises(SafetyError):
+        assert_binance_demo_url("https://demo-fapi.binance.com")
 
 
 def test_unknown_binance_endpoint_is_forbidden() -> None:
