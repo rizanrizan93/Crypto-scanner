@@ -105,6 +105,7 @@ _FRAME_WEIGHTS = {
     "15": Decimal("0.40"),
     "60": Decimal("0.35"),
 }
+_MIN_CANDIDATE_COVERAGE = Decimal("0.72")
 
 
 def analyze_frame(timeframe: str, candles: tuple[Candle, ...]) -> FrameAnalysis:
@@ -137,10 +138,12 @@ def _score_frame(frame: FrameAnalysis, direction: TradeDirection) -> Decimal:
 
     favorable_event = (
         bullish
-        and frame.structure.event in {StructureEvent.BOS_BULLISH, StructureEvent.CHOCH_BULLISH}
+        and frame.structure.event
+        in {StructureEvent.BOS_BULLISH, StructureEvent.CHOCH_BULLISH}
     ) or (
         not bullish
-        and frame.structure.event in {StructureEvent.BOS_BEARISH, StructureEvent.CHOCH_BEARISH}
+        and frame.structure.event
+        in {StructureEvent.BOS_BEARISH, StructureEvent.CHOCH_BEARISH}
     )
     if favorable_event:
         score += Decimal(8 if "CHOCH" in frame.structure.event.value else 5)
@@ -259,7 +262,7 @@ def _status_for(
         return DiscoveryStatus.NO_TRADE
     if direction is TradeDirection.NEUTRAL:
         return DiscoveryStatus.WATCH
-    if score >= Decimal(65) and coverage >= Decimal("0.70"):
+    if score >= Decimal(65) and coverage >= _MIN_CANDIDATE_COVERAGE:
         return DiscoveryStatus.CANDIDATE
     return DiscoveryStatus.WATCH
 
@@ -278,18 +281,25 @@ def analyze_symbol(
         for timeframe in ("5", "15", "60")
     )
     weighted_long = sum(
-        (_score_frame(frame, TradeDirection.LONG) * _FRAME_WEIGHTS[frame.timeframe]
-         for frame in frames),
+        (
+            _score_frame(frame, TradeDirection.LONG) * _FRAME_WEIGHTS[frame.timeframe]
+            for frame in frames
+        ),
         Decimal(0),
     )
     weighted_short = sum(
-        (_score_frame(frame, TradeDirection.SHORT) * _FRAME_WEIGHTS[frame.timeframe]
-         for frame in frames),
+        (
+            _score_frame(frame, TradeDirection.SHORT) * _FRAME_WEIGHTS[frame.timeframe]
+            for frame in frames
+        ),
         Decimal(0),
     )
 
     aggregate_momentum = sum(
-        (frame.regime.momentum10 * _FRAME_WEIGHTS[frame.timeframe] for frame in frames),
+        (
+            frame.regime.momentum10 * _FRAME_WEIGHTS[frame.timeframe]
+            for frame in frames
+        ),
         Decimal(0),
     )
     weighted_long += _native_adjustment(
@@ -305,7 +315,7 @@ def analyze_symbol(
     long_score = min(Decimal(100), max(Decimal(0), weighted_long))
     short_score = min(Decimal(100), max(Decimal(0), weighted_short))
 
-    coverage = Decimal("0.70") + native.coverage * Decimal("0.30")
+    coverage = Decimal("0.60") + native.coverage * Decimal("0.40")
     direction = _direction_from_scores(long_score, short_score)
     selected_score = long_score if direction is TradeDirection.LONG else short_score
     status = _status_for(direction, selected_score, coverage, frames, native)
@@ -321,7 +331,7 @@ def analyze_symbol(
         reasons.append("HIGHER_TIMEFRAME_CHAOTIC")
     if direction is TradeDirection.NEUTRAL:
         reasons.append("DIRECTION_NOT_SEPARATED")
-    if coverage < Decimal("0.70"):
+    if coverage < _MIN_CANDIDATE_COVERAGE:
         reasons.append("EVIDENCE_COVERAGE_LOW")
     if not reasons:
         reasons.append("DISCOVERY_EVIDENCE_ALIGNED")
@@ -353,9 +363,15 @@ def derive_market_context(results: tuple[DiscoveryResult, ...]) -> MarketContext
         if frame.timeframe in {"15", "60"}
     ):
         return MarketContextBias.CHAOTIC
-    if btc.direction is eth.direction is TradeDirection.LONG:
+    if (
+        btc.direction is TradeDirection.LONG
+        and eth.direction is TradeDirection.LONG
+    ):
         return MarketContextBias.BULLISH
-    if btc.direction is eth.direction is TradeDirection.SHORT:
+    if (
+        btc.direction is TradeDirection.SHORT
+        and eth.direction is TradeDirection.SHORT
+    ):
         return MarketContextBias.BEARISH
     return MarketContextBias.MIXED
 
@@ -388,16 +404,21 @@ def apply_market_context(
         direction = _direction_from_scores(long_score, short_score)
         selected_score = long_score if direction is TradeDirection.LONG else short_score
 
-        if context is MarketContextBias.CHAOTIC and result.symbol not in {"BTCUSDT", "ETHUSDT"}:
+        if (
+            context is MarketContextBias.CHAOTIC
+            and result.symbol not in {"BTCUSDT", "ETHUSDT"}
+        ):
             status = DiscoveryStatus.NO_TRADE
             reasons = tuple(dict.fromkeys((*result.reasons, "BTC_ETH_CONTEXT_CHAOTIC")))
         else:
-            native_quality_status = result.status
-            if native_quality_status is DiscoveryStatus.NO_TRADE:
-                status = native_quality_status
+            if result.status is DiscoveryStatus.NO_TRADE:
+                status = DiscoveryStatus.NO_TRADE
             elif direction is TradeDirection.NEUTRAL:
                 status = DiscoveryStatus.WATCH
-            elif selected_score >= Decimal(65) and result.evidence_coverage >= Decimal("0.70"):
+            elif (
+                selected_score >= Decimal(65)
+                and result.evidence_coverage >= _MIN_CANDIDATE_COVERAGE
+            ):
                 status = DiscoveryStatus.CANDIDATE
             else:
                 status = DiscoveryStatus.WATCH
@@ -420,7 +441,10 @@ def apply_market_context(
     return tuple(
         sorted(
             adjusted,
-            key=lambda item: (item.status is DiscoveryStatus.CANDIDATE, item.ranking_score),
+            key=lambda item: (
+                item.status is DiscoveryStatus.CANDIDATE,
+                item.ranking_score,
+            ),
             reverse=True,
         )
     )
