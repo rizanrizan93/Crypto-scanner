@@ -1,0 +1,40 @@
+name: Exchange Access Diagnostic
+
+on:
+  push:
+    branches: [diagnostic/exchange-access]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe exchange public/demo endpoints
+        shell: bash
+        run: |
+          set +e
+          probe() {
+            name="$1"
+            url="$2"
+            echo "===== ${name} ====="
+            tmp="$(mktemp)"
+            code=$(curl -L -sS --connect-timeout 8 --max-time 15 -o "$tmp" -w "%{http_code}" "$url")
+            rc=$?
+            body=$(head -c 300 "$tmp" | tr '\n' ' ')
+            rm -f "$tmp"
+            echo "curl_rc=${rc} http=${code}"
+            echo "body=${body}"
+            echo
+          }
+
+          echo "runner_ip_region_hint_from_metadata is not authoritative; GitHub log shows Azure region separately."
+          probe "Bybit Testnet" "https://api-testnet.bybit.com/v5/market/time"
+          probe "Binance Futures Testnet" "https://testnet.binancefuture.com/fapi/v1/ping"
+          probe "Binance Futures Testnet ExchangeInfo" "https://testnet.binancefuture.com/fapi/v1/exchangeInfo"
+          probe "OKX public/demo REST" "https://openapi.okx.com/api/v5/public/time"
+          probe "Bitget public REST" "https://api.bitget.com/api/v2/public/time"
+          probe "Bitget futures ticker" "https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol=BTCUSDT"
+          probe "Kraken Futures demo" "https://demo-futures.kraken.com/derivatives/api/v3/tickers"
