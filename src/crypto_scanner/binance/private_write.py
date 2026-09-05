@@ -68,6 +68,8 @@ def _algo_client_id(plan: EntryOrderPlan, purpose: str) -> str:
 
 
 def build_protection_plan(plan: EntryOrderPlan, filled_qty: Decimal) -> ProtectionPlan:
+    if plan.side not in {"Buy", "Sell"}:
+        raise BinanceOrderSubmissionError("planned entry side is invalid")
     if filled_qty <= 0:
         raise BinanceOrderSubmissionError("filled quantity must be positive before protection")
     if filled_qty > plan.qty:
@@ -155,14 +157,19 @@ class BinanceTestnetOrderClient:
                     f"Binance write rejected code={payload.get('code')} msg={payload.get('msg')}"
                 )
             response.raise_for_status()
-        if isinstance(payload, dict) and isinstance(payload.get("code"), int):
-            if payload["code"] < 0:
-                raise BinanceOrderSubmissionError(
-                    f"Binance write rejected code={payload.get('code')} msg={payload.get('msg')}"
-                )
+        if (
+            isinstance(payload, dict)
+            and isinstance(payload.get("code"), int)
+            and payload["code"] < 0
+        ):
+            raise BinanceOrderSubmissionError(
+                f"Binance write rejected code={payload.get('code')} msg={payload.get('msg')}"
+            )
         return payload
 
     def submit_entry(self, plan: EntryOrderPlan) -> OrderSubmissionAck:
+        if plan.side not in {"Buy", "Sell"}:
+            raise BinanceOrderSubmissionError("planned entry side is invalid")
         side = "BUY" if plan.side == "Buy" else "SELL"
         payload = self._signed_post(
             "/fapi/v1/order",
