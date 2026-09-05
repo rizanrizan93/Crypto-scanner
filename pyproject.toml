@@ -22,6 +22,7 @@ dev = [
 [project.scripts]
 crypto-scanner-public-smoke = "crypto_scanner.smoke_public:main"
 crypto-scanner-private-readonly-smoke = "crypto_scanner.smoke_private:main"
+crypto-scanner-discovery = "crypto_scanner.run_discovery:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_scanner"]
