@@ -5,8 +5,7 @@ import os
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
 
-from crypto_scanner.bybit.models import InstrumentInfo
-from crypto_scanner.bybit.private_models import PositionSnapshot, WalletSnapshot
+from crypto_scanner.binance.models import InstrumentInfo, PositionSnapshot, WalletSnapshot
 from crypto_scanner.fast_lane import ReadinessDecision, ReadinessStatus
 from crypto_scanner.safety import SafetyContract
 
@@ -60,8 +59,8 @@ def deterministic_order_link_id(symbol: str, signal_id: str) -> str:
         raise ExecutionPlanError("signal_id cannot be empty")
     digest = hashlib.sha256(signal_id.encode("utf-8")).hexdigest()[:16]
     value = f"cs-{symbol.lower()}-{digest}"
-    if len(value) > 36:
-        raise ExecutionPlanError("generated orderLinkId exceeds Bybit limit")
+    if len(value) > 32:
+        raise ExecutionPlanError("generated client order id exceeds scanner safety limit")
     return value
 
 
