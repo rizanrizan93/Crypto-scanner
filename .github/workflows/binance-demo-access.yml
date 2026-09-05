@@ -1,0 +1,32 @@
+name: Binance Demo Access Diagnostic
+
+on:
+  push:
+    branches: [diagnostic/exchange-access]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe current Binance demo endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe() {
+            name="$1"
+            url="$2"
+            tmp="$(mktemp)"
+            code=$(curl -L -sS --connect-timeout 8 --max-time 15 -o "$tmp" -w "%{http_code}" "$url")
+            echo "===== ${name} ====="
+            echo "http=${code}"
+            head -c 300 "$tmp" | tr '\n' ' '
+            echo
+            rm -f "$tmp"
+          }
+          probe "Binance Futures Demo ping" "https://demo-fapi.binance.com/fapi/v1/ping"
+          probe "Binance Futures Demo exchangeInfo" "https://demo-fapi.binance.com/fapi/v1/exchangeInfo"
+          probe "Binance Futures legacy testnet ping" "https://testnet.binancefuture.com/fapi/v1/ping"
