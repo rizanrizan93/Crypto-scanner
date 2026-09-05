@@ -43,6 +43,21 @@ def encode_query(params: dict[str, object]) -> str:
     return urlencode(pairs)
 
 
+def _sign_payload(api_secret: str, payload: str) -> str:
+    return hmac.new(
+        api_secret.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _validate_signing_window(timestamp_ms: int, recv_window_ms: int) -> None:
+    if timestamp_ms <= 0:
+        raise ValueError("timestamp_ms must be positive")
+    if not 1 <= recv_window_ms <= 5000:
+        raise ValueError("recv_window_ms must be between 1 and 5000")
+
+
 def sign_get_request(
     *,
     api_key: str,
@@ -51,13 +66,20 @@ def sign_get_request(
     recv_window_ms: int,
     query_string: str,
 ) -> str:
-    if timestamp_ms <= 0:
-        raise ValueError("timestamp_ms must be positive")
-    if not 1 <= recv_window_ms <= 5000:
-        raise ValueError("recv_window_ms must be between 1 and 5000")
+    _validate_signing_window(timestamp_ms, recv_window_ms)
     payload = f"{timestamp_ms}{api_key}{recv_window_ms}{query_string}"
-    return hmac.new(
-        api_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    return _sign_payload(api_secret, payload)
+
+
+def sign_post_request(
+    *,
+    api_key: str,
+    api_secret: str,
+    timestamp_ms: int,
+    recv_window_ms: int,
+    json_body: str,
+) -> str:
+    """Sign the exact JSON body string that will be transmitted to Bybit V5."""
+    _validate_signing_window(timestamp_ms, recv_window_ms)
+    payload = f"{timestamp_ms}{api_key}{recv_window_ms}{json_body}"
+    return _sign_payload(api_secret, payload)

@@ -28,7 +28,7 @@ class BybitPrivateApiError(RuntimeError):
 
 
 class BybitReadOnlyViolation(BybitPrivateApiError):
-    """Raised when code attempts to access a path outside the Phase 2 read-only contract."""
+    """Raised when code attempts to access a path outside the read-only contract."""
 
 
 _READ_ONLY_PATHS = frozenset(
@@ -36,6 +36,7 @@ _READ_ONLY_PATHS = frozenset(
         "/v5/account/wallet-balance",
         "/v5/position/list",
         "/v5/order/realtime",
+        "/v5/order/history",
     }
 )
 
@@ -73,7 +74,7 @@ class BybitPrivateReadOnlyClient:
 
     def _signed_get(self, path: str, params: dict[str, object]) -> dict[str, Any]:
         if path not in _READ_ONLY_PATHS:
-            raise BybitReadOnlyViolation(f"private path is not allowed in Phase 2: {path}")
+            raise BybitReadOnlyViolation(f"private read path is not allowed: {path}")
 
         query_string = encode_query(params)
         timestamp_ms = self._time_source_ms()
@@ -173,6 +174,31 @@ class BybitPrivateReadOnlyClient:
             max_pages=10,
         )
         return tuple(parse_order_snapshot(item) for item in rows if isinstance(item, dict))
+
+    def get_order_by_link_id(
+        self,
+        *,
+        symbol: str,
+        order_link_id: str,
+    ) -> OrderSnapshot | None:
+        if not order_link_id.strip():
+            raise ValueError("order_link_id cannot be empty")
+        params = {
+            "category": "linear",
+            "symbol": symbol.upper(),
+            "orderLinkId": order_link_id,
+            "limit": 1,
+        }
+        realtime = self._signed_get("/v5/order/realtime", params)
+        rows = realtime.get("list") or []
+        if rows and isinstance(rows[0], dict):
+            return parse_order_snapshot(rows[0])
+
+        history = self._signed_get("/v5/order/history", params)
+        rows = history.get("list") or []
+        if rows and isinstance(rows[0], dict):
+            return parse_order_snapshot(rows[0])
+        return None
 
     def _paginate(
         self,
