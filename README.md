@@ -13,7 +13,7 @@ This repository is independent from:
 
 It must not share runtime state, databases, secrets, positions, scoring, calibration, or execution state with those projects. Proven engineering patterns may be reused only as patterns.
 
-## Phase 0 safety contract
+## Safety contract
 
 Current venue and execution scope:
 
@@ -38,6 +38,32 @@ Initial universe:
 - SOLUSDT
 - XRPUSDT
 - BNBUSDT
+
+## Phase 1 public market data
+
+The public Bybit Testnet layer requires no API key and currently provides:
+
+- exact instrument metadata: tick size, quantity step, minimum order quantity, notional and leverage metadata
+- ticker snapshot: last/mark/index price, best bid/ask, 24h volume/turnover, open interest and funding
+- OHLCV intervals used by the scanner: 1m, 3m, 5m, 15m, 1h and 4h
+- open-interest history
+- funding-rate history
+- WebSocket ticker stream
+- WebSocket public trade stream with taker Buy/Sell side
+- WebSocket orderbook depth 50 with snapshot/delta reconstruction
+- fail-closed local book validation for stale updates and crossed/locked books
+
+Numeric exchange values are parsed as `Decimal`, not binary floating point, so later sizing and price rounding can use exact exchange metadata.
+
+Public connectivity smoke test:
+
+```bash
+crypto-scanner-public-smoke --websocket-seconds 12
+```
+
+The repository also includes a GitHub Actions `Bybit Public Smoke` workflow. GitHub-hosted runners may execute from a location whose source IP is rejected by Bybit with HTTP 403. The smoke command classifies that condition separately when the workflow passes the explicit `--allow-forbidden-hosted-runner` diagnostic flag. That exception is accepted only when `GITHUB_ACTIONS=true`; it is not available to the operational scanner runtime. Any other HTTP, schema, WebSocket, data-quality, or orderbook failure remains fatal.
+
+A successful GitHub unit/CI run therefore proves the code contract, but it is not a substitute for venue-connectivity validation from the eventual permitted operational runtime host. The 24/7 scanner/execution engine must run from infrastructure that is eligible to access Bybit under the account's jurisdiction and Bybit terms; GitHub Actions remains CI/deployment tooling rather than the trading daemon.
 
 ## Planned architecture
 
@@ -73,7 +99,7 @@ ruff check .
 pytest
 ```
 
-No API key is required for Phase 0 CI.
+No API key is required for Phase 0 or Phase 1 public connectivity.
 
 ## Secrets
 
