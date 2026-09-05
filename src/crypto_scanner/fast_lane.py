@@ -38,7 +38,11 @@ class ReadinessDecision:
         return self.status is ReadinessStatus.EXECUTION_READY
 
 
-def _aligned_microstructure(direction: TradeDirection, value: Decimal, threshold: Decimal) -> bool:
+def _aligned_microstructure(
+    direction: TradeDirection,
+    value: Decimal,
+    threshold: Decimal,
+) -> bool:
     if direction is TradeDirection.LONG:
         return value >= threshold
     if direction is TradeDirection.SHORT:
@@ -91,10 +95,12 @@ def evaluate_execution_readiness(
         reasons.append("ORDERBOOK_IMBALANCE_MISSING")
     elif not Decimal(-1) <= evidence.orderbook_imbalance <= Decimal(1):
         reasons.append("ORDERBOOK_IMBALANCE_INVALID")
-    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not _aligned_microstructure(
-        candidate.direction,
-        evidence.orderbook_imbalance,
-        Decimal("0.05"),
+    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not (
+        _aligned_microstructure(
+            candidate.direction,
+            evidence.orderbook_imbalance,
+            Decimal("0.05"),
+        )
     ):
         reasons.append("ORDERBOOK_NOT_ALIGNED")
 
@@ -102,10 +108,12 @@ def evaluate_execution_readiness(
         reasons.append("TAKER_PRESSURE_MISSING")
     elif not Decimal(-1) <= evidence.taker_pressure <= Decimal(1):
         reasons.append("TAKER_PRESSURE_INVALID")
-    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not _aligned_microstructure(
-        candidate.direction,
-        evidence.taker_pressure,
-        Decimal("0.03"),
+    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not (
+        _aligned_microstructure(
+            candidate.direction,
+            evidence.taker_pressure,
+            Decimal("0.03"),
+        )
     ):
         reasons.append("TAKER_PRESSURE_NOT_ALIGNED")
 
@@ -114,7 +122,11 @@ def evaluate_execution_readiness(
         (5, candles_5m, "5M"),
     ):
         try:
-            filtered = closed_candles(candles, interval_minutes=interval_minutes, now_ms=now_ms)
+            filtered = closed_candles(
+                candles,
+                interval_minutes=interval_minutes,
+                now_ms=now_ms,
+            )
         except ValueError:
             filtered = ()
         if len(filtered) < 100:
@@ -141,7 +153,7 @@ def evaluate_execution_readiness(
     if geometry is not None:
         if geometry.chase_atr > Decimal("0.80"):
             reasons.append("CHASE_TOO_FAR")
-        if geometry.rr_tp1 < Decimal("1.45") or geometry.rr_tp2 < Decimal("2.40"):
+        if geometry.rr_tp1 < Decimal("1.20") or geometry.rr_tp2 < Decimal("2.00"):
             reasons.append("RR_TOO_LOW")
 
     if reasons:
