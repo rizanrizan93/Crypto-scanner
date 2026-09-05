@@ -8,13 +8,19 @@ version = "0.1.0"
 description = "Independent Bybit Testnet crypto market scanner and automated trading research system"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "httpx>=0.27,<1",
+  "websockets>=13,<16",
+]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3,<9",
   "ruff>=0.9,<1",
 ]
+
+[project.scripts]
+crypto-scanner-public-smoke = "crypto_scanner.smoke_public:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_scanner"]
