@@ -26,7 +26,8 @@ class TestnetExecutionArm:
     def require_enabled(self) -> None:
         if not self.enabled:
             raise ExecutionPlanError(
-                "Testnet order writes are disarmed; CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED required"
+                "Testnet order writes are disarmed; "
+                "CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED required"
             )
 
 
@@ -71,9 +72,10 @@ def build_entry_order_plan(
     wallet: WalletSnapshot,
     positions: tuple[PositionSnapshot, ...],
     instrument: InstrumentInfo,
-    safety: SafetyContract = SafetyContract(),
+    safety: SafetyContract | None = None,
     risk_fraction: Decimal = Decimal("0.005"),
 ) -> EntryOrderPlan:
+    safety = safety or SafetyContract()
     safety.validate()
     if readiness.status is not ReadinessStatus.EXECUTION_READY or readiness.geometry is None:
         raise ExecutionPlanError("readiness decision is not EXECUTION_READY")
