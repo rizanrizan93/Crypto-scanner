@@ -29,6 +29,14 @@ _INTERVALS = {
     "60": "1h",
     "240": "4h",
 }
+_INTERVAL_MS = {
+    "1": 60_000,
+    "3": 3 * 60_000,
+    "5": 5 * 60_000,
+    "15": 15 * 60_000,
+    "60": 60 * 60_000,
+    "240": 4 * 60 * 60_000,
+}
 _OI_PERIODS = {
     "5min": "5m",
     "15min": "15m",
@@ -37,6 +45,25 @@ _OI_PERIODS = {
     "4h": "4h",
     "1d": "1d",
 }
+
+
+def _parse_klines(rows: list[Any]) -> tuple[Candle, ...]:
+    candles: list[Candle] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 8:
+            raise BinancePublicApiError("kline row has unexpected shape")
+        candles.append(
+            Candle(
+                start_time_ms=int(row[0]),
+                open=decimal_required(row[1], "open"),
+                high=decimal_required(row[2], "high"),
+                low=decimal_required(row[3], "low"),
+                close=decimal_required(row[4], "close"),
+                volume=decimal_required(row[5], "volume"),
+                turnover=decimal_required(row[7], "quote_volume"),
+            )
+        )
+    return tuple(candles)
 
 
 class BinanceDemoPublicRestClient:
@@ -161,18 +188,63 @@ class BinanceDemoPublicRestClient:
         )
         if not isinstance(rows, list):
             raise BinancePublicApiError("kline response must be a JSON array")
-        return tuple(
-            Candle(
-                start_time_ms=int(row[0]),
-                open=decimal_required(row[1], "open"),
-                high=decimal_required(row[2], "high"),
-                low=decimal_required(row[3], "low"),
-                close=decimal_required(row[4], "close"),
-                volume=decimal_required(row[5], "volume"),
-                turnover=decimal_required(row[7], "quote_volume"),
+        return _parse_klines(rows)
+
+    def get_klines_window(
+        self,
+        symbol: str,
+        interval: str,
+        *,
+        start_time_ms: int,
+        end_time_ms: int,
+        max_candles: int = 50_000,
+    ) -> tuple[Candle, ...]:
+        """Fetch an exact historical window with bounded, forward-only pagination."""
+        if interval not in _INTERVALS:
+            raise ValueError(f"unsupported scanner interval: {interval}")
+        if start_time_ms < 0 or end_time_ms <= start_time_ms:
+            raise ValueError("kline window requires 0 <= start_time_ms < end_time_ms")
+        if not 1 <= max_candles <= 50_000:
+            raise ValueError("max_candles must be between 1 and 50000")
+
+        interval_ms = _INTERVAL_MS[interval]
+        cursor = start_time_ms
+        by_start: dict[int, Candle] = {}
+        while cursor < end_time_ms:
+            remaining = max_candles - len(by_start)
+            if remaining <= 0:
+                raise BinancePublicApiError("requested kline window exceeds max_candles guard")
+            batch_limit = min(1500, remaining)
+            rows = self._get(
+                "/fapi/v1/klines",
+                {
+                    "symbol": symbol.upper(),
+                    "interval": _INTERVALS[interval],
+                    "startTime": cursor,
+                    "endTime": end_time_ms - 1,
+                    "limit": batch_limit,
+                },
             )
-            for row in rows
-        )
+            if not isinstance(rows, list):
+                raise BinancePublicApiError("kline window response must be a JSON array")
+            batch = _parse_klines(rows)
+            if not batch:
+                break
+
+            for candle in batch:
+                if start_time_ms <= candle.start_time_ms < end_time_ms:
+                    by_start[candle.start_time_ms] = candle
+            last_start = max(candle.start_time_ms for candle in batch)
+            next_cursor = last_start + interval_ms
+            if next_cursor <= cursor:
+                raise BinancePublicApiError("kline pagination did not advance")
+            cursor = next_cursor
+            if len(batch) < batch_limit:
+                break
+
+        if cursor < end_time_ms and len(by_start) >= max_candles:
+            raise BinancePublicApiError("requested kline window exceeds max_candles guard")
+        return tuple(by_start[key] for key in sorted(by_start))
 
     def get_open_interest(
         self,
