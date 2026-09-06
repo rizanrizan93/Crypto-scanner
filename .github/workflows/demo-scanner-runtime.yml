@@ -1,0 +1,54 @@
+name: Crypto Scanner Demo Runtime
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-scanner-demo-runtime
+  cancel-in-progress: false
+
+jobs:
+  scanner-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
+      BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
+      CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
+      CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+      - name: Verify required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BINANCE_DEMO_API_KEY}"
+          test -n "${BINANCE_DEMO_API_SECRET}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Disarmed Phase 6 pre-audit
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
+      - name: Run armed scanner cycle
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-cycle
+      - name: Disarmed Phase 6 post-audit
+        if: always()
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
