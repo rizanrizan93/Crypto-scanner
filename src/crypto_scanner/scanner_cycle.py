@@ -67,6 +67,9 @@ class DurableReadySignal:
 @dataclass(frozen=True, slots=True)
 class ScannerCycleResult:
     status: str
+    venue: str
+    environment: str
+    live_trading_locked: bool
     run_id: str
     execution_armed: bool
     account_gate: AccountExecutionGate
@@ -288,6 +291,33 @@ def run_scanner_cycle() -> ScannerCycleResult:
                 selected = ready
                 break
 
+        # Re-read authoritative account/protection state immediately before the only
+        # possible entry submission. A state change during discovery must fail closed.
+        if selected is not None:
+            fresh_snapshot = recover_authoritative_state(private)
+            fresh_gate = evaluate_account_execution_gate(fresh_snapshot, safety)
+            account_gate = fresh_gate
+            if fresh_gate.blocked:
+                execution_skips.append(
+                    {
+                        "symbol": selected.candidate.symbol,
+                        "reason": "ACCOUNT_GATE_CHANGED",
+                    }
+                )
+                selected = None
+            else:
+                fresh_skip = candidate_account_skip_reason(
+                    selected.candidate.symbol,
+                    fresh_snapshot,
+                    safety,
+                )
+                if fresh_skip is not None:
+                    execution_skips.append(
+                        {"symbol": selected.candidate.symbol, "reason": fresh_skip}
+                    )
+                    selected = None
+                snapshot = fresh_snapshot
+
         if selected is not None:
             try:
                 with BinanceTestnetOrderClient(
@@ -309,9 +339,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
                     )
                 orders_submitted = 1
             except UnknownSubmissionOutcome as exc:
-                execution_error = (
-                    f"UNKNOWN_SUBMISSION_OUTCOME:{exc.client_id}:{exc}"
-                )
+                execution_error = f"UNKNOWN_SUBMISSION_OUTCOME:{exc.client_id}:{exc}"
             except (
                 BinanceOrderSubmissionError,
                 DurableExecutionError,
@@ -334,6 +362,9 @@ def run_scanner_cycle() -> ScannerCycleResult:
 
     return ScannerCycleResult(
         status=status,
+        venue="BINANCE",
+        environment="DEMO",
+        live_trading_locked=safety.live_trading_locked,
         run_id=run_id,
         execution_armed=arm.enabled,
         account_gate=account_gate,
