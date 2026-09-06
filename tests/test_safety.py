@@ -14,6 +14,7 @@ def test_default_safety_contract_is_binance_demo_and_valid() -> None:
     contract.validate()
     assert contract.venue is Venue.BINANCE
     assert contract.live_trading_locked is True
+    assert contract.max_concurrent_positions == 10
 
 
 def test_risk_above_one_percent_fails_closed() -> None:
@@ -21,9 +22,10 @@ def test_risk_above_one_percent_fails_closed() -> None:
         SafetyContract(max_risk_per_trade=0.0101).validate()
 
 
-def test_excessive_position_count_fails_closed() -> None:
+def test_ten_positions_is_allowed_but_eleven_fails_closed() -> None:
+    SafetyContract(max_concurrent_positions=10).validate()
     with pytest.raises(SafetyError):
-        SafetyContract(max_concurrent_positions=4).validate()
+        SafetyContract(max_concurrent_positions=11).validate()
 
 
 def test_excessive_leverage_fails_closed() -> None:
