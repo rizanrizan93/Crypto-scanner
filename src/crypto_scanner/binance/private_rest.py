@@ -38,6 +38,36 @@ class AlgoOrderSnapshot:
     updated_time_ms: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class UserTradeFill:
+    symbol: str
+    trade_id: str
+    order_id: str
+    side: str
+    position_side: str
+    price: Decimal
+    qty: Decimal
+    quote_qty: Decimal
+    realized_pnl: Decimal
+    commission: Decimal
+    commission_asset: str
+    buyer: bool
+    maker: bool
+    time_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class IncomeRecord:
+    symbol: str
+    income_type: str
+    income: Decimal
+    asset: str
+    time_ms: int
+    transaction_id: str
+    trade_id: str
+    info: str
+
+
 _ALLOWED_READ_PATHS = frozenset(
     {
         "/fapi/v2/account",
@@ -45,6 +75,10 @@ _ALLOWED_READ_PATHS = frozenset(
         "/fapi/v1/openOrders",
         "/fapi/v1/order",
         "/fapi/v1/algoOrder",
+        "/fapi/v1/openAlgoOrders",
+        "/fapi/v1/allAlgoOrders",
+        "/fapi/v1/userTrades",
+        "/fapi/v1/income",
         "/fapi/v1/positionSide/dual",
     }
 )
@@ -77,6 +111,56 @@ def _parse_order(item: dict[str, Any]) -> OrderSnapshot:
         close_on_trigger=bool(item.get("closePosition", False)),
         created_time_ms=int(created) if created not in (None, "") else None,
         updated_time_ms=int(updated) if updated not in (None, "") else None,
+    )
+
+
+def _parse_algo_order(payload: dict[str, Any]) -> AlgoOrderSnapshot:
+    updated = payload.get("updateTime") or payload.get("createTime")
+    quantity = payload.get("quantity") or payload.get("origQty")
+    trigger_price = payload.get("triggerPrice") or payload.get("stopPrice")
+    return AlgoOrderSnapshot(
+        algo_id=str(payload.get("algoId") or ""),
+        client_algo_id=str(payload.get("clientAlgoId") or ""),
+        symbol=str(payload.get("symbol") or ""),
+        side=str(payload.get("side") or ""),
+        order_type=str(payload.get("orderType") or payload.get("type") or ""),
+        status=str(payload.get("algoStatus") or payload.get("status") or ""),
+        trigger_price=decimal_optional(trigger_price),
+        quantity=decimal_optional(quantity),
+        reduce_only=bool(payload.get("reduceOnly", False)),
+        updated_time_ms=int(updated) if updated not in (None, "") else None,
+    )
+
+
+def _parse_user_trade(item: dict[str, Any]) -> UserTradeFill:
+    return UserTradeFill(
+        symbol=str(item.get("symbol") or ""),
+        trade_id=str(item.get("id") or ""),
+        order_id=str(item.get("orderId") or ""),
+        side=str(item.get("side") or ""),
+        position_side=str(item.get("positionSide") or "BOTH"),
+        price=decimal_required(item.get("price"), "trade.price"),
+        qty=decimal_required(item.get("qty"), "trade.qty"),
+        quote_qty=decimal_required(item.get("quoteQty"), "trade.quoteQty"),
+        realized_pnl=decimal_optional(item.get("realizedPnl")) or Decimal(0),
+        commission=decimal_optional(item.get("commission")) or Decimal(0),
+        commission_asset=str(item.get("commissionAsset") or ""),
+        buyer=bool(item.get("buyer", False)),
+        maker=bool(item.get("maker", False)),
+        time_ms=int(item.get("time") or 0),
+    )
+
+
+def _parse_income(item: dict[str, Any]) -> IncomeRecord:
+    return IncomeRecord(
+        symbol=str(item.get("symbol") or ""),
+        income_type=str(item.get("incomeType") or ""),
+        income=decimal_required(item.get("income"), "income.income"),
+        asset=str(item.get("asset") or ""),
+        time_ms=int(item.get("time") or 0),
+        transaction_id=str(item.get("tranId") or ""),
+        trade_id=str(item.get("tradeId") or ""),
+        info=str(item.get("info") or ""),
     )
 
 
@@ -209,6 +293,15 @@ class BinanceDemoPrivateReadOnlyClient:
             raise BinancePrivateApiError("open-order response must be a JSON array")
         return tuple(_parse_order(item) for item in payload if isinstance(item, dict))
 
+    def get_open_algo_orders(self, symbol: str | None = None) -> tuple[AlgoOrderSnapshot, ...]:
+        params: dict[str, object] = {"algoType": "CONDITIONAL"}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        payload = self._signed_get("/fapi/v1/openAlgoOrders", params)
+        if not isinstance(payload, list):
+            raise BinancePrivateApiError("open-algo-order response must be a JSON array")
+        return tuple(_parse_algo_order(item) for item in payload if isinstance(item, dict))
+
     def get_position_mode_is_hedged(self) -> bool:
         payload = self._signed_get("/fapi/v1/positionSide/dual")
         if not isinstance(payload, dict) or not isinstance(payload.get("dualSidePosition"), bool):
@@ -231,18 +324,52 @@ class BinanceDemoPrivateReadOnlyClient:
         )
         if not isinstance(payload, dict):
             raise BinancePrivateApiError("algo order response must be a JSON object")
-        updated = payload.get("updateTime") or payload.get("createTime")
-        quantity = payload.get("quantity") or payload.get("origQty")
-        trigger_price = payload.get("triggerPrice") or payload.get("stopPrice")
-        return AlgoOrderSnapshot(
-            algo_id=str(payload.get("algoId") or ""),
-            client_algo_id=str(payload.get("clientAlgoId") or ""),
-            symbol=str(payload.get("symbol") or ""),
-            side=str(payload.get("side") or ""),
-            order_type=str(payload.get("type") or ""),
-            status=str(payload.get("algoStatus") or payload.get("status") or ""),
-            trigger_price=decimal_optional(trigger_price),
-            quantity=decimal_optional(quantity),
-            reduce_only=bool(payload.get("reduceOnly", False)),
-            updated_time_ms=int(updated) if updated not in (None, "") else None,
-        )
+        return _parse_algo_order(payload)
+
+    def get_user_trades(
+        self,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        from_id: int | None = None,
+        limit: int = 1000,
+    ) -> tuple[UserTradeFill, ...]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("user-trades limit must be between 1 and 1000")
+        params: dict[str, object] = {"symbol": symbol.upper(), "limit": limit}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+        if from_id is not None:
+            params["fromId"] = from_id
+        payload = self._signed_get("/fapi/v1/userTrades", params)
+        if not isinstance(payload, list):
+            raise BinancePrivateApiError("user-trades response must be a JSON array")
+        return tuple(_parse_user_trade(item) for item in payload if isinstance(item, dict))
+
+    def get_income_history(
+        self,
+        *,
+        symbol: str | None = None,
+        income_type: str | None = None,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        limit: int = 1000,
+    ) -> tuple[IncomeRecord, ...]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("income-history limit must be between 1 and 1000")
+        params: dict[str, object] = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        if income_type:
+            params["incomeType"] = income_type
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+        payload = self._signed_get("/fapi/v1/income", params)
+        if not isinstance(payload, list):
+            raise BinancePrivateApiError("income-history response must be a JSON array")
+        return tuple(_parse_income(item) for item in payload if isinstance(item, dict))

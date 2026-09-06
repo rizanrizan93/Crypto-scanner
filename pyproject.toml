@@ -25,6 +25,7 @@ crypto-scanner-private-readonly-smoke = "crypto_scanner.smoke_private:main"
 crypto-scanner-discovery = "crypto_scanner.run_discovery:main"
 crypto-scanner-runtime-preflight = "crypto_scanner.runtime_preflight:main"
 crypto-scanner-execution-smoke = "crypto_scanner.execution_smoke:main"
+crypto-scanner-phase6-audit = "crypto_scanner.phase6_audit:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_scanner"]
