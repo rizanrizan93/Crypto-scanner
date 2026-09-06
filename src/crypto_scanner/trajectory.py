@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from crypto_scanner.binance.models import Candle, PositionSnapshot
 from crypto_scanner.binance.private_rest import UserTradeFill
-from crypto_scanner.closed_trades import TradeDirection
+from crypto_scanner.closed_trades import ClosedTradeEvidence, TradeDirection
 
 _ONE_MINUTE_MS = 60_000
 
@@ -126,6 +126,23 @@ def infer_open_episode(
         entry_price=position.avg_price,
         current_qty=position.size,
         trade_ids=tuple(episode_trade_ids),
+    )
+
+
+def episode_from_closed_trade(trade: ClosedTradeEvidence) -> OpenEpisodeEvidence:
+    if trade.entry_time_ms < 0 or trade.exit_time_ms < trade.entry_time_ms:
+        raise TrajectoryError("closed trade timestamps are invalid")
+    if trade.entry_qty <= 0 or trade.average_entry_price <= 0:
+        raise TrajectoryError("closed trade entry evidence is invalid")
+    if trade.average_exit_price <= 0:
+        raise TrajectoryError("closed trade exit price is invalid")
+    return OpenEpisodeEvidence(
+        symbol=trade.symbol,
+        direction=trade.direction,
+        entry_time_ms=trade.entry_time_ms,
+        entry_price=trade.average_entry_price,
+        current_qty=trade.entry_qty,
+        trade_ids=trade.trade_ids,
     )
 
 
