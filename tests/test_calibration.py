@@ -47,7 +47,7 @@ def test_micro_calibration_can_tighten_entry_widen_stop_and_cap_distant_tp2() ->
     assert proposal.after.min_rr_tp2 >= Decimal("2.00")
 
 
-def test_calibration_does_not_reapply_without_enough_new_evidence() -> None:
+def test_calibration_waits_without_enough_new_evidence() -> None:
     current = StrategyParameters(max_chase_atr=Decimal("0.76"))
     proposal = propose_parameters(
         CalibrationMetrics(
@@ -64,6 +64,25 @@ def test_calibration_does_not_reapply_without_enough_new_evidence() -> None:
     assert proposal.applied is False
     assert proposal.after == current
     assert proposal.reasons == ("WAITING_FOR_NEW_EVIDENCE",)
+
+
+def test_calibration_can_reconsider_after_five_total_new_micro_samples() -> None:
+    current = StrategyParameters(max_chase_atr=Decimal("0.76"))
+    proposal = propose_parameters(
+        CalibrationMetrics(
+            sample_size=15,
+            win_rate=Decimal("0.30"),
+            profit_factor=Decimal("0.50"),
+            median_mae_r=Decimal("0.70"),
+            median_mfe_r=Decimal("1.50"),
+        ),
+        current,
+        previous_reviewed_sample_size=10,
+    )
+
+    assert proposal.applied is True
+    assert proposal.after.max_chase_atr == Decimal("0.74")
+    assert "TIGHTEN_ENTRY_CHASE_ON_WEAK_OUTCOMES" in proposal.reasons
 
 
 def test_strategy_parameter_bounds_never_allow_quality_floor_to_loosen() -> None:
