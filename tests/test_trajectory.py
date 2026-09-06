@@ -7,15 +7,20 @@ import pytest
 
 from crypto_scanner.binance.models import Candle, PositionSnapshot
 from crypto_scanner.binance.private_rest import UserTradeFill
-from crypto_scanner.closed_trades import TradeDirection
+from crypto_scanner.closed_trades import ClosedTradeEvidence, TradeDirection
 from crypto_scanner.trajectory import (
     OpenEpisodeEvidence,
     TrajectoryError,
     TrajectoryQuality,
+    episode_from_closed_trade,
     infer_open_episode,
     reconstruct_conservative_trajectory,
 )
-from crypto_scanner.trajectory_store import JsonTrajectoryStore, TrajectoryRecord
+from crypto_scanner.trajectory_store import (
+    JsonTrajectoryStore,
+    TrajectoryRecord,
+    TrajectoryState,
+)
 
 
 def _position(*, side: str = "Buy", size: str = "1.5") -> PositionSnapshot:
@@ -98,6 +103,31 @@ def test_infer_open_episode_uses_latest_flat_to_open_window() -> None:
 def test_infer_open_episode_fails_if_fill_history_does_not_match_exchange() -> None:
     with pytest.raises(TrajectoryError, match="fill history ends"):
         infer_open_episode(_position(size="2"), (_fill("1", "BUY", "1", 10_000),))
+
+
+def test_closed_trade_becomes_replay_episode() -> None:
+    trade = ClosedTradeEvidence(
+        symbol="XRPUSDT",
+        direction=TradeDirection.LONG,
+        entry_time_ms=10_000,
+        exit_time_ms=100_000,
+        entry_qty=Decimal("3.6"),
+        exit_qty=Decimal("3.6"),
+        average_entry_price=Decimal("1.4"),
+        average_exit_price=Decimal("1.5"),
+        realized_pnl=Decimal("0.36"),
+        commission=Decimal("0.01"),
+        funding_fee=Decimal("0"),
+        net_pnl=Decimal("0.35"),
+        trade_ids=("1", "2"),
+    )
+
+    episode = episode_from_closed_trade(trade)
+
+    assert episode.entry_time_ms == 10_000
+    assert episode.entry_price == Decimal("1.4")
+    assert episode.current_qty == Decimal("3.6")
+    assert episode.trade_ids == ("1", "2")
 
 
 def test_conservative_long_replay_excludes_partial_entry_and_current_minutes() -> None:
@@ -203,6 +233,7 @@ def test_json_store_preserves_decimal_precision(tmp_path) -> None:
         (
             TrajectoryRecord(
                 snapshot=metrics,
+                state=TrajectoryState.OPEN,
                 calibration_eligible=False,
                 persistence_mode="NO_SUPABASE",
                 note="diagnostic",
@@ -213,4 +244,5 @@ def test_json_store_preserves_decimal_precision(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload[0]["snapshot"]["entry_price"] == "1.23456789"
     assert payload[0]["snapshot"]["quality"] == "CONSERVATIVE_1M_REPLAY"
+    assert payload[0]["state"] == "OPEN"
     assert payload[0]["calibration_eligible"] is False
