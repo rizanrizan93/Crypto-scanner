@@ -7,6 +7,7 @@ from enum import StrEnum
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
 from crypto_scanner.signal_geometry import GeometryError, SignalGeometry, build_signal_geometry
+from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.technical import closed_candles
 
 
@@ -59,7 +60,10 @@ def evaluate_execution_readiness(
     instrument: InstrumentInfo,
     evidence: FastLaneEvidence,
     now_ms: int,
+    strategy: StrategyParameters | None = None,
 ) -> ReadinessDecision:
+    strategy = strategy or DEFAULT_STRATEGY_PARAMETERS
+    strategy.validate()
     reasons: list[str] = []
 
     if candidate.status is not DiscoveryStatus.CANDIDATE:
@@ -146,14 +150,15 @@ def evaluate_execution_readiness(
                 candles_5m=candles_5m,
                 ticker=ticker,
                 instrument=instrument,
+                strategy=strategy,
             )
         except (GeometryError, ValueError) as exc:
             reasons.append(f"GEOMETRY_INVALID:{exc}")
 
     if geometry is not None:
-        if geometry.chase_atr > Decimal("0.80"):
+        if geometry.chase_atr > strategy.max_chase_atr:
             reasons.append("CHASE_TOO_FAR")
-        if geometry.rr_tp1 < Decimal("1.20") or geometry.rr_tp2 < Decimal("2.00"):
+        if geometry.rr_tp1 < strategy.min_rr_tp1 or geometry.rr_tp2 < strategy.min_rr_tp2:
             reasons.append("RR_TOO_LOW")
 
     if reasons:
