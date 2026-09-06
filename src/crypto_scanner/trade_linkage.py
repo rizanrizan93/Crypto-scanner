@@ -139,7 +139,12 @@ class DurableTradeLinkage:
                 f"Supabase schema mismatch expected={SCHEMA_VERSION} actual={actual}"
             )
 
-    def save_discovery_run(self, run: DiscoveryRun) -> str:
+    def save_discovery_run(
+        self,
+        run: DiscoveryRun,
+        *,
+        execution_armed: bool = False,
+    ) -> str:
         self.assert_schema_current()
         run_id = stable_run_id(run)
         failures = [
@@ -156,7 +161,7 @@ class DurableTradeLinkage:
                     "status": status,
                     "source": "DISCOVERY",
                     "git_sha": os.getenv("GITHUB_SHA", "").strip() or None,
-                    "execution_armed": False,
+                    "execution_armed": execution_armed,
                     "metadata": {
                         "venue": "BINANCE",
                         "environment": "DEMO",
