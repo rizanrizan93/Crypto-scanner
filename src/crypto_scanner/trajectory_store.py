@@ -22,6 +22,7 @@ class TrajectoryRecord:
     calibration_eligible: bool
     persistence_mode: str
     note: str
+    signal_id: str | None = None
     realized_pnl: Decimal | None = None
     commission: Decimal | None = None
     funding_fee: Decimal | None = None
