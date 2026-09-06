@@ -42,6 +42,10 @@ jobs:
       - name: Heartbeat running
         continue-on-error: true
         run: crypto-scanner-heartbeat SCANNER_CYCLE RUNNING
+      - name: Reconcile scanner-owned flat orphans
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-lifecycle-maintenance
       - name: Disarmed Phase 6 pre-audit
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
