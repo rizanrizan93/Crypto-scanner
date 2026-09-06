@@ -14,6 +14,9 @@ class ExecutionPlanError(RuntimeError):
     """Raised when an execution-ready signal cannot be safely sized."""
 
 
+MAX_AVAILABLE_MARGIN_UTILIZATION = Decimal("0.90")
+
+
 @dataclass(frozen=True, slots=True)
 class TestnetExecutionArm:
     enabled: bool
@@ -85,6 +88,8 @@ def build_entry_order_plan(
         raise ExecutionPlanError("instrument is not an active USDT contract")
     if wallet.total_equity is None or wallet.total_equity <= 0:
         raise ExecutionPlanError("authoritative account equity is missing or invalid")
+    if wallet.total_available_balance is None or wallet.total_available_balance <= 0:
+        raise ExecutionPlanError("authoritative available balance is missing or invalid")
 
     max_risk = Decimal(str(safety.max_risk_per_trade))
     if not Decimal(0) < risk_fraction <= max_risk:
@@ -107,10 +112,15 @@ def build_entry_order_plan(
         raise ExecutionPlanError("signal stop distance is invalid")
 
     equity = wallet.total_equity
+    available_balance = wallet.total_available_balance
     risk_amount = equity * risk_fraction
     risk_qty = risk_amount / stop_distance
     leverage_cap = Decimal(str(safety.max_leverage))
-    leverage_qty = equity * leverage_cap / geometry.entry_price
+    equity_notional_cap = equity * leverage_cap
+    available_notional_cap = (
+        available_balance * leverage_cap * MAX_AVAILABLE_MARGIN_UTILIZATION
+    )
+    leverage_qty = min(equity_notional_cap, available_notional_cap) / geometry.entry_price
     raw_qty = min(risk_qty, leverage_qty)
     qty = _floor_to_step(raw_qty, instrument.qty_step)
 
@@ -132,6 +142,8 @@ def build_entry_order_plan(
     leverage_equivalent = notional / equity
     if leverage_equivalent > leverage_cap:
         raise ExecutionPlanError("computed notional exceeds leverage safety cap")
+    if notional > available_notional_cap:
+        raise ExecutionPlanError("computed notional exceeds available-margin safety cap")
 
     side = "Buy" if geometry.direction.value == "LONG" else "Sell"
     return EntryOrderPlan(

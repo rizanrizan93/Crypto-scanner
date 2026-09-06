@@ -16,6 +16,7 @@ from crypto_scanner.binance.private_write import (
     build_protection_plan,
 )
 from crypto_scanner.execution_plan import (
+    MAX_AVAILABLE_MARGIN_UTILIZATION,
     EntryOrderPlan,
     ExecutionPlanError,
     TestnetExecutionArm,
@@ -46,9 +47,18 @@ class DurableExecutionResult:
     tp2_client_algo_id: str
 
 
-def _required_leverage(plan: EntryOrderPlan, safety: SafetyContract) -> int:
-    value = plan.leverage_equivalent.to_integral_value(rounding=ROUND_CEILING)
-    leverage = max(1, int(value))
+def _required_leverage(
+    plan: EntryOrderPlan,
+    safety: SafetyContract,
+    *,
+    available_balance: Decimal,
+) -> int:
+    if available_balance <= 0:
+        raise DurableExecutionError("available balance is invalid for leverage planning")
+    exposure_value = plan.leverage_equivalent.to_integral_value(rounding=ROUND_CEILING)
+    reserved_margin = available_balance * MAX_AVAILABLE_MARGIN_UTILIZATION
+    margin_value = (plan.notional / reserved_margin).to_integral_value(rounding=ROUND_CEILING)
+    leverage = max(1, int(exposure_value), int(margin_value))
     if leverage > safety.max_leverage:
         raise DurableExecutionError("planned leverage exceeds safety contract")
     return leverage
@@ -201,7 +211,14 @@ class DurableExecutionCoordinator:
         except ExecutionPlanError as exc:
             raise DurableExecutionError(str(exc)) from exc
 
-        leverage = _required_leverage(plan, self.safety)
+        available_balance = wallet.total_available_balance
+        if available_balance is None or available_balance <= 0:
+            raise DurableExecutionError("authoritative available balance is missing or invalid")
+        leverage = _required_leverage(
+            plan,
+            self.safety,
+            available_balance=available_balance,
+        )
         self.writer.set_leverage(plan.symbol, leverage)
         planned_at_ms = self.now_ms()
         self.linkage.save_entry_plan(
