@@ -2,11 +2,6 @@ name: Durable Trade Linkage Smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/durable-trade-linkage
-    paths:
-      - .github/workflows/durable-linkage-smoke.yml
 
 permissions:
   contents: read
