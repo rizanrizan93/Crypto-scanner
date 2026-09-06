@@ -1,0 +1,40 @@
+name: Binance Protected Execution Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type TESTNET to run one tiny protected Demo execution"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  protected-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
+      BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
+      CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+      CRYPTO_SCANNER_EXECUTION_SMOKE: CONFIRMED
+      CRYPTO_SCANNER_SMOKE_ID: ${{ github.run_id }}
+    steps:
+      - name: Require explicit Testnet confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirmation }}" = "TESTNET"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+      - name: Run one tiny protected Demo execution
+        run: crypto-scanner-execution-smoke
