@@ -119,15 +119,15 @@ def main() -> None:
                         )
                     elif initial_stop is not None:
                         note = (
-                            "Open trajectory has durable initial-stop evidence but the full scanner "
-                            "signal/setup/regime chain is incomplete; R is measured but excluded "
-                            "from calibration."
+                            "Open trajectory has durable initial-stop evidence but the full "
+                            "scanner signal/setup/regime chain is incomplete; R is measured but "
+                            "excluded from calibration."
                         )
                     else:
                         note = (
-                            "Open trajectory reconstructed from Binance evidence without a complete "
-                            "durable original signal/stop chain; R and calibration eligibility are "
-                            "disabled."
+                            "Open trajectory reconstructed from Binance evidence without a "
+                            "complete durable original signal/stop chain; R and calibration "
+                            "eligibility are disabled."
                         )
                     records.append(
                         TrajectoryRecord(
@@ -201,8 +201,9 @@ def main() -> None:
                         )
                     elif initial_stop is not None:
                         note = (
-                            "Closed trajectory has durable initial-stop evidence but lacks the full "
-                            "scanner signal chain; R is measured but excluded from calibration."
+                            "Closed trajectory has durable initial-stop evidence but lacks the "
+                            "full scanner signal chain; R is measured but excluded from "
+                            "calibration."
                         )
                     else:
                         note = (
