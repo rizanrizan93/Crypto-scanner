@@ -235,7 +235,7 @@ def build_signal_geometry(
     )
 
     # Calibration may shorten only an excessively distant structural TP2. It can never
-    # reduce TP2 below the original 2.00R quality floor.
+    # move TP2 inside TP1 or below the original 2.00R quality floor.
     if strategy.tp2_cap_rr is not None:
         if direction is TradeDirection.LONG:
             capped = _round_price(
@@ -243,7 +243,7 @@ def build_signal_geometry(
                 instrument.tick_size,
                 up=False,
             )
-            if capped < tp2:
+            if tp1 < capped < tp2:
                 tp2 = capped
         else:
             capped = _round_price(
@@ -251,7 +251,7 @@ def build_signal_geometry(
                 instrument.tick_size,
                 up=True,
             )
-            if capped > tp2:
+            if tp2 < capped < tp1:
                 tp2 = capped
 
     rr1 = abs(tp1 - entry) / risk
@@ -260,6 +260,10 @@ def build_signal_geometry(
         raise GeometryError("nearest structural TP has poor reward/risk")
     if rr2 < strategy.min_rr_tp2:
         raise GeometryError("secondary structural TP has poor reward/risk")
+    if direction is TradeDirection.LONG and tp2 <= tp1:
+        raise GeometryError("LONG TP2 must remain beyond TP1")
+    if direction is TradeDirection.SHORT and tp2 >= tp1:
+        raise GeometryError("SHORT TP2 must remain beyond TP1")
 
     return SignalGeometry(
         symbol=symbol,
