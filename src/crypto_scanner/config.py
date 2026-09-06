@@ -15,6 +15,21 @@ DEFAULT_UNIVERSE = (
     "SOLUSDT",
     "XRPUSDT",
     "BNBUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "TRXUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "SUIUSDT",
+    "LTCUSDT",
+    "BCHUSDT",
+    "DOTUSDT",
+    "UNIUSDT",
+    "AAVEUSDT",
+    "NEARUSDT",
+    "ETCUSDT",
+    "FILUSDT",
+    "ATOMUSDT",
 )
 
 
