@@ -58,12 +58,15 @@ class BinanceDemoMicrostructureClient:
             raise BinanceMicrostructureError(
                 f"Binance microstructure request failed path={path}: {exc}"
             ) from exc
-        if isinstance(payload, dict) and isinstance(payload.get("code"), int):
-            if payload["code"] < 0:
-                raise BinanceMicrostructureError(
-                    f"Binance microstructure API error code={payload.get('code')} "
-                    f"msg={payload.get('msg')}"
-                )
+        if (
+            isinstance(payload, dict)
+            and isinstance(payload.get("code"), int)
+            and payload["code"] < 0
+        ):
+            raise BinanceMicrostructureError(
+                f"Binance microstructure API error code={payload.get('code')} "
+                f"msg={payload.get('msg')}"
+            )
         return payload
 
     def get_evidence(
