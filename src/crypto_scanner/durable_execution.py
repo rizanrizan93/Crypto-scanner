@@ -151,6 +151,22 @@ class DurableExecutionCoordinator:
         self._verify_algo_new(tp2_ack)
         return protection, stop_ack, tp2_ack
 
+    def _persist_post_fill_failure(
+        self,
+        plan: EntryOrderPlan,
+        order: OrderSnapshot,
+        *,
+        status: str,
+    ) -> None:
+        self.linkage.save_entry_plan(
+            plan,
+            status=status,
+            venue_order_id=order.order_id,
+            avg_price=order.avg_price,
+            created_at_ms=order.created_time_ms,
+            updated_at_ms=self.now_ms(),
+        )
+
     def execute(
         self,
         readiness: ReadinessDecision,
@@ -226,7 +242,22 @@ class DurableExecutionCoordinator:
             raise DurableExecutionError("reconciled entry quantity is invalid")
 
         # Safety before analytics: install exchange-side protection immediately after fill.
-        _protection, stop_ack, tp2_ack = self._install_protection(plan, filled_qty)
+        try:
+            _protection, stop_ack, tp2_ack = self._install_protection(plan, filled_qty)
+        except UnknownSubmissionOutcome:
+            self._persist_post_fill_failure(
+                plan,
+                order,
+                status="FILLED_PROTECTION_UNKNOWN",
+            )
+            raise
+        except (BinanceOrderSubmissionError, DurableExecutionError):
+            self._persist_post_fill_failure(
+                plan,
+                order,
+                status="FILLED_PROTECTION_FAILED",
+            )
+            raise
 
         fills = self._entry_fills(order)
         for fill in fills:
