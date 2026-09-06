@@ -50,9 +50,14 @@ class BinanceDemoMicrostructureClient:
     def _get(self, path: str, params: dict[str, object]) -> Any:
         url = f"{self.base_url}{path}"
         assert_binance_demo_url(url)
-        response = self._client.get(url, params=params)
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = self._client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise BinanceMicrostructureError(
+                f"Binance microstructure request failed path={path}: {exc}"
+            ) from exc
         if isinstance(payload, dict) and isinstance(payload.get("code"), int):
             if payload["code"] < 0:
                 raise BinanceMicrostructureError(
