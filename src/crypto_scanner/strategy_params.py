@@ -69,7 +69,9 @@ class StrategyParameters:
             max_chase_atr=dec("max_chase_atr", "0.80"),
             min_rr_tp1=dec("min_rr_tp1", "1.20"),
             min_rr_tp2=dec("min_rr_tp2", "2.00"),
-            tp2_cap_rr=(Decimal(str(cap_raw)) if cap_raw not in {None, ""} else None),
+            tp2_cap_rr=(
+                Decimal(str(cap_raw)) if cap_raw is not None and cap_raw != "" else None
+            ),
         )
         result.validate()
         return result
@@ -123,7 +125,7 @@ def load_strategy_parameters(
             raise PersistenceError("strategy state row is invalid")
         try:
             return StrategyParameters.from_mapping(row["state"])
-        except (ValueError, ArithmeticError) as exc:
+        except (ValueError, ArithmeticError, TypeError) as exc:
             raise PersistenceError(f"strategy state is malformed: {exc}") from exc
     finally:
         if owns_client:
