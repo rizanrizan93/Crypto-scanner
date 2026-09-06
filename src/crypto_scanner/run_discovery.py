@@ -5,6 +5,8 @@ import json
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.discovery_pipeline import DiscoveryPipeline
+from crypto_scanner.persistence import SupabasePersistenceConfig
+from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 
 def main() -> None:
@@ -12,11 +14,19 @@ def main() -> None:
     with BinanceDemoPublicRestClient(base_url=config.binance_rest_url) as client:
         run = DiscoveryPipeline(client, universe=config.universe).run()
 
+    persistence_config = SupabasePersistenceConfig.from_environment()
+    run_id: str | None = None
+    if persistence_config.enabled:
+        with DurableTradeLinkage(persistence_config) as linkage:
+            run_id = linkage.save_discovery_run(run)
+
     payload = {
         "venue": "BINANCE",
         "environment": "DEMO",
         "started_at_ms": run.started_at_ms,
         "completed_at_ms": run.completed_at_ms,
+        "run_id": run_id,
+        "persistence": "SUPABASE" if run_id else "NONE",
         "healthy_symbol_count": run.healthy_symbol_count,
         "results": [
             {
