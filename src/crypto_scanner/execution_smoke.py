@@ -160,6 +160,12 @@ def main() -> None:
             raise ExecutionSmokeError("execution smoke requires zero pre-existing positions")
         if open_orders:
             raise ExecutionSmokeError("execution smoke requires zero pre-existing open orders")
+        if private.get_position_mode_is_hedged():
+            raise ExecutionSmokeError("execution smoke requires Binance One-way Mode, not Hedge Mode")
+
+        confirmed_leverage = writer.set_leverage(SMOKE_SYMBOL, 1)
+        if confirmed_leverage != 1:
+            raise ExecutionSmokeError("failed to confirm 1x leverage before entry")
 
         instrument = public.get_instrument(SMOKE_SYMBOL)
         ticker = public.get_ticker(SMOKE_SYMBOL)
@@ -198,6 +204,7 @@ def main() -> None:
                     "live_trading_locked": True,
                     "symbol": plan.symbol,
                     "side": plan.side,
+                    "exchange_leverage": confirmed_leverage,
                     "planned_qty": str(plan.qty),
                     "filled_qty": str(filled_qty),
                     "planned_notional": str(plan.notional),

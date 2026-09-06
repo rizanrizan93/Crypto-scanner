@@ -167,6 +167,18 @@ class BinanceTestnetOrderClient:
             )
         return payload
 
+    def set_leverage(self, symbol: str, leverage: int) -> int:
+        if not 1 <= leverage <= 3:
+            raise BinanceOrderSubmissionError("scanner leverage guard only permits 1x to 3x")
+        payload = self._signed_post(
+            "/fapi/v1/leverage",
+            {"symbol": symbol.upper(), "leverage": leverage},
+            f"leverage:{symbol.upper()}:{leverage}",
+        )
+        if not isinstance(payload, dict) or int(payload.get("leverage", 0)) != leverage:
+            raise BinanceOrderSubmissionError("Binance did not confirm requested leverage")
+        return leverage
+
     def submit_entry(self, plan: EntryOrderPlan) -> OrderSubmissionAck:
         if plan.side not in {"Buy", "Sell"}:
             raise BinanceOrderSubmissionError("planned entry side is invalid")
