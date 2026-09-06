@@ -147,7 +147,6 @@ def propose_parameters(
     stop_buffer = current.stop_buffer_atr
     tp2_cap = current.tp2_cap_rr
 
-    # Entry calibration may only tighten the original chase allowance; it never loosens it.
     if poor:
         tightened = _clamp(
             current.max_chase_atr - chase_step,
@@ -158,7 +157,6 @@ def propose_parameters(
             max_chase = tightened
             reasons.append("TIGHTEN_ENTRY_CHASE_ON_WEAK_OUTCOMES")
 
-    # SL calibration stays in a narrow ATR band around the original structure-based stop.
     if (
         metrics.median_mae_r is not None
         and metrics.median_mfe_r is not None
@@ -183,8 +181,6 @@ def propose_parameters(
             stop_buffer = tightened_stop
             reasons.append("TIGHTEN_SL_BUFFER_ON_LOW_MAE_POSITIVE_EDGE")
 
-    # TP2 stays structural by default. On weak outcomes with evidence that excursions commonly
-    # peak between 2R and 2.6R, cap only excessively distant structural TP2 at a >=2R target.
     if poor and metrics.median_mfe_r is not None:
         if Decimal("2.00") <= metrics.median_mfe_r < Decimal("2.60"):
             raw_cap = _clamp(
@@ -320,7 +316,7 @@ def run_calibration() -> dict[str, object]:
     proposal = propose_parameters(
         metrics,
         current,
-        previous_reviewed_sample_size=previous_reviewed,
+        previous_reviewed_sample_size=previous_applied,
     )
     generated_at_ms = _now_ms()
 
@@ -342,6 +338,8 @@ def run_calibration() -> dict[str, object]:
         "after": proposal.after.to_dict(),
         "minimum_new_samples": proposal.minimum_new_samples,
         "previous_reviewed_sample_size": previous_reviewed,
+        "previous_applied_sample_size": previous_applied,
+        "evidence_baseline_sample_size": previous_applied,
         "eligible_only": True,
         "history_complete_only": True,
         "live_trading_locked": True,
