@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 import websockets
@@ -312,11 +314,7 @@ class BinanceDemoPrivateStream:
             finally:
                 stop.set()
                 keepalive_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await keepalive_task
-                except asyncio.CancelledError:
-                    pass
-                try:
+                with suppress(BinancePrivateStreamError):
                     await asyncio.to_thread(listen.stop)
-                except BinancePrivateStreamError:
-                    pass
