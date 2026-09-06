@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 
-from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot, PositionSnapshot
+from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient, UserTradeFill
 from crypto_scanner.binance.private_write import (
     AlgoSubmissionAck,
@@ -22,7 +22,6 @@ from crypto_scanner.execution_plan import (
     build_entry_order_plan,
 )
 from crypto_scanner.fast_lane import ReadinessDecision, ReadinessStatus
-from crypto_scanner.persistence import PersistenceError
 from crypto_scanner.safety import SafetyContract
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
@@ -104,7 +103,7 @@ class DurableExecutionCoordinator:
                 return last
             if last.order_status in {"CANCELED", "EXPIRED", "REJECTED"}:
                 break
-            self.sleep(Decimal("0.5"))
+            self.sleep(0.5)
         if last is None:
             raise DurableExecutionError("entry reconciliation returned no order state")
         if (last.cum_exec_qty or Decimal(0)) > 0:
@@ -255,7 +254,9 @@ class DurableExecutionCoordinator:
             if position.is_open and position.symbol == plan.symbol
         )
         if len(open_positions) != 1:
-            raise DurableExecutionError("expected exactly one authoritative open position after fill")
+            raise DurableExecutionError(
+                "expected exactly one authoritative open position after fill"
+            )
         position = open_positions[0]
         entry_time_ms = min(fill.time_ms for fill in fills)
         position_id = self.linkage.save_open_position(
