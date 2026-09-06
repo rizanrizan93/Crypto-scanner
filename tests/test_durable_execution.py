@@ -214,11 +214,20 @@ class FakeWriter:
             exchange_time_ms=NOW + 1,
         )
 
-    def submit_conditional_exit(self, plan) -> AlgoSubmissionAck:
-        self.calls.append(plan.order_type)
+    def submit_stop_loss(self, protection) -> AlgoSubmissionAck:
+        self.calls.append("STOP_MARKET")
         return AlgoSubmissionAck(
-            algo_id=f"algo:{plan.client_algo_id}",
-            client_algo_id=plan.client_algo_id,
+            algo_id="algo-stop",
+            client_algo_id=protection.stop_client_algo_id,
+            state=SubmissionState.PENDING_RECONCILIATION,
+            exchange_time_ms=NOW + 3,
+        )
+
+    def submit_take_profit(self, protection) -> AlgoSubmissionAck:
+        self.calls.append("TAKE_PROFIT_MARKET")
+        return AlgoSubmissionAck(
+            algo_id="algo-tp2",
+            client_algo_id=protection.take_profit_client_algo_id,
             state=SubmissionState.PENDING_RECONCILIATION,
             exchange_time_ms=NOW + 3,
         )
@@ -279,7 +288,7 @@ def test_disarmed_coordinator_stops_before_any_private_or_write_call() -> None:
     assert linkage.order_statuses == []
 
 
-def test_success_persists_identity_and_installs_stop_before_take_profits() -> None:
+def test_success_persists_identity_and_installs_full_size_stop_then_tp2() -> None:
     private = FakePrivate()
     writer = FakeWriter()
     linkage = FakeLinkage()
@@ -296,6 +305,7 @@ def test_success_persists_identity_and_installs_stop_before_take_profits() -> No
     assert result.signal_id == SIGNAL_ID
     assert result.filled_qty == Decimal("2.500")
     assert result.average_entry_price == Decimal("100")
+    assert result.tp1_client_algo_id is None
     assert linkage.order_statuses == [
         "PLANNED",
         "PENDING_RECONCILIATION",
@@ -305,11 +315,7 @@ def test_success_persists_identity_and_installs_stop_before_take_profits() -> No
     assert linkage.position_saved
     assert writer.calls[0].startswith("leverage:BTCUSDT:")
     assert writer.calls[1] == "entry"
-    assert writer.calls[2:] == [
-        "STOP_MARKET",
-        "TAKE_PROFIT_MARKET",
-        "TAKE_PROFIT_MARKET",
-    ]
+    assert writer.calls[2:] == ["STOP_MARKET", "TAKE_PROFIT_MARKET"]
 
 
 def test_unknown_entry_outcome_is_persisted_and_never_retried() -> None:
@@ -346,7 +352,7 @@ def test_fill_quantity_mismatch_fails_before_position_is_marked_durable() -> Non
     with pytest.raises(DurableExecutionError, match="does not match order quantity"):
         coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
 
-    assert writer.calls[2] == "STOP_MARKET"
+    assert writer.calls[2:] == ["STOP_MARKET", "TAKE_PROFIT_MARKET"]
     assert not linkage.position_saved
     assert "FILLED_PROTECTED" not in linkage.order_statuses
 
