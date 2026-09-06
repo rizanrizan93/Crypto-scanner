@@ -45,6 +45,7 @@ _ALLOWED_READ_PATHS = frozenset(
         "/fapi/v1/openOrders",
         "/fapi/v1/order",
         "/fapi/v1/algoOrder",
+        "/fapi/v1/positionSide/dual",
     }
 )
 
@@ -207,6 +208,12 @@ class BinanceDemoPrivateReadOnlyClient:
         if not isinstance(payload, list):
             raise BinancePrivateApiError("open-order response must be a JSON array")
         return tuple(_parse_order(item) for item in payload if isinstance(item, dict))
+
+    def get_position_mode_is_hedged(self) -> bool:
+        payload = self._signed_get("/fapi/v1/positionSide/dual")
+        if not isinstance(payload, dict) or not isinstance(payload.get("dualSidePosition"), bool):
+            raise BinancePrivateApiError("position-mode response is invalid")
+        return payload["dualSidePosition"]
 
     def get_order_by_client_id(self, symbol: str, client_order_id: str) -> OrderSnapshot:
         payload = self._signed_get(
