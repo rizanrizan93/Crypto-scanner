@@ -41,5 +41,16 @@ jobs:
           test -n "${BINANCE_DEMO_API_SECRET}"
           test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
           test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Heartbeat running
+        continue-on-error: true
+        run: crypto-scanner-heartbeat TRAJECTORY_CYCLE RUNNING
       - name: Reconstruct and persist trajectory and closed trades
         run: crypto-scanner-phase7-audit
+      - name: Heartbeat success
+        if: success()
+        continue-on-error: true
+        run: crypto-scanner-heartbeat TRAJECTORY_CYCLE SUCCESS
+      - name: Heartbeat failed
+        if: failure()
+        continue-on-error: true
+        run: crypto-scanner-heartbeat TRAJECTORY_CYCLE FAILED
