@@ -3,18 +3,31 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from decimal import Decimal
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from crypto_scanner.trajectory import TrajectoryMetrics
 
 
+class TrajectoryState(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
 @dataclass(frozen=True, slots=True)
 class TrajectoryRecord:
     snapshot: TrajectoryMetrics
+    state: TrajectoryState
     calibration_eligible: bool
     persistence_mode: str
     note: str
+    realized_pnl: Decimal | None = None
+    commission: Decimal | None = None
+    funding_fee: Decimal | None = None
+    net_pnl: Decimal | None = None
+    exit_time_ms: int | None = None
+    exit_price: Decimal | None = None
 
 
 class TrajectoryStore(Protocol):
@@ -34,6 +47,9 @@ def _json_default(value: object) -> object:
 
 def record_to_dict(record: TrajectoryRecord) -> dict[str, object]:
     payload = asdict(record)
+    state = payload.get("state")
+    if hasattr(state, "value"):
+        payload["state"] = state.value
     snapshot = payload["snapshot"]
     if isinstance(snapshot, dict):
         direction = snapshot.get("direction")
