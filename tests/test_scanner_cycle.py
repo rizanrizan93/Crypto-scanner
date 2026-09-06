@@ -127,12 +127,22 @@ def test_candidate_filter_skips_existing_symbol_and_correlation_third_leg() -> N
     assert candidate_account_skip_reason("BNBUSDT", snapshot, safety) is None
 
 
-def test_candidate_filter_blocks_when_max_positions_already_reached() -> None:
+def test_candidate_filter_blocks_when_ten_positions_already_reached() -> None:
     snapshot = _snapshot(
-        positions=(
-            _position("XRPUSDT"),
-            _position("BNBUSDT"),
-            _position("BTCUSDT"),
+        positions=tuple(
+            _position(symbol)
+            for symbol in (
+                "BTCUSDT",
+                "XRPUSDT",
+                "BNBUSDT",
+                "DOGEUSDT",
+                "ADAUSDT",
+                "TRXUSDT",
+                "LINKUSDT",
+                "AVAXUSDT",
+                "SUIUSDT",
+                "LTCUSDT",
+            )
         ),
     )
 
