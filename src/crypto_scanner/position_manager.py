@@ -41,7 +41,11 @@ def _position_for_symbol(
     positions: tuple[PositionSnapshot, ...],
     symbol: str,
 ) -> PositionSnapshot | None:
-    matches = tuple(position for position in positions if position.symbol == symbol and position.is_open)
+    matches = tuple(
+        position
+        for position in positions
+        if position.symbol == symbol and position.is_open
+    )
     if len(matches) > 1:
         raise ValueError(f"multiple open position records for {symbol}; One-way Mode required")
     return matches[0] if matches else None
