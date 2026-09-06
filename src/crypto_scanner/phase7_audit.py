@@ -12,6 +12,11 @@ from crypto_scanner.closed_trades import reconstruct_closed_trades
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.execution_plan import TestnetExecutionArm
 from crypto_scanner.lifecycle import recover_authoritative_state
+from crypto_scanner.persistence import (
+    PersistenceError,
+    SupabasePersistenceConfig,
+    SupabaseTrajectoryStore,
+)
 from crypto_scanner.safety import SafetyContract
 from crypto_scanner.trajectory import (
     TrajectoryError,
@@ -49,6 +54,7 @@ def main() -> None:
     if arm.enabled:
         raise RuntimeError("Phase 7 audit is read-only and refuses to run while execution is armed")
 
+    persistence_config = SupabasePersistenceConfig.from_environment()
     credentials = BinanceDemoCredentials.from_environment()
     measured_until_ms = time.time_ns() // 1_000_000
     records: list[TrajectoryRecord] = []
@@ -101,7 +107,9 @@ def main() -> None:
                         snapshot=metrics,
                         state=TrajectoryState.OPEN,
                         calibration_eligible=False,
-                        persistence_mode="NO_SUPABASE",
+                        persistence_mode=(
+                            "SUPABASE" if persistence_config.enabled else "NO_SUPABASE"
+                        ),
                         note=note,
                     )
                 )
@@ -156,7 +164,9 @@ def main() -> None:
                         snapshot=metrics,
                         state=TrajectoryState.CLOSED,
                         calibration_eligible=False,
-                        persistence_mode="NO_SUPABASE",
+                        persistence_mode=(
+                            "SUPABASE" if persistence_config.enabled else "NO_SUPABASE"
+                        ),
                         note=note,
                         realized_pnl=trade.realized_pnl,
                         commission=trade.commission,
@@ -179,9 +189,26 @@ def main() -> None:
     if output_path:
         JsonTrajectoryStore(output_path).save(tuple(records))
 
+    persistence_error = False
+    if persistence_config.enabled:
+        try:
+            with SupabaseTrajectoryStore(persistence_config) as store:
+                store.save(tuple(records))
+        except PersistenceError as exc:
+            persistence_error = True
+            issues.append(
+                {
+                    "scope": "PERSISTENCE",
+                    "symbol": "*",
+                    "detail": str(exc),
+                }
+            )
+
     open_count = sum(record.state is TrajectoryState.OPEN for record in records)
     closed_count = sum(record.state is TrajectoryState.CLOSED for record in records)
-    if issues and not records:
+    if persistence_error:
+        status = "FAIL_PHASE7_PERSISTENCE"
+    elif issues and not records:
         status = "FAIL_PHASE7_RECONSTRUCTION"
     elif issues:
         status = "PASS_PHASE7_PARTIAL"
@@ -190,14 +217,23 @@ def main() -> None:
     else:
         status = "PASS_PHASE7_NO_TRADE_EVIDENCE"
 
+    if persistence_config.enabled and output_path:
+        persistence_mode = "SUPABASE+JSON_DIAGNOSTIC"
+    elif persistence_config.enabled:
+        persistence_mode = "SUPABASE"
+    elif output_path:
+        persistence_mode = "JSON_DIAGNOSTIC_ONLY"
+    else:
+        persistence_mode = "NONE"
+
     payload = {
         "status": status,
         "venue": "BINANCE",
         "environment": "DEMO",
         "execution_armed": False,
         "live_trading_locked": True,
-        "supabase_connected": False,
-        "persistence": "JSON_DIAGNOSTIC_ONLY" if output_path else "NONE",
+        "supabase_connected": persistence_config.enabled and not persistence_error,
+        "persistence": persistence_mode,
         "calibration_eligible": False,
         "trajectory_count": len(records),
         "open_trajectory_count": open_count,
@@ -206,7 +242,7 @@ def main() -> None:
         "issues": issues,
     }
     print(json.dumps(payload, indent=2, sort_keys=True, default=_json_default))
-    if issues and not records:
+    if persistence_error or (issues and not records):
         raise SystemExit(1)
 
 
