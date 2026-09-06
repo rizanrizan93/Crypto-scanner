@@ -2,6 +2,11 @@ name: Binance Private Preflight
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - verify/current-phase6-state
+    paths:
+      - .github/workflows/binance-private-preflight.yml
 
 permissions:
   contents: read
@@ -9,7 +14,7 @@ permissions:
 jobs:
   preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
       BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
@@ -38,3 +43,5 @@ jobs:
           }
       - name: Run disarmed authenticated preflight
         run: crypto-scanner-runtime-preflight
+      - name: Run Phase 6 protection audit
+        run: crypto-scanner-phase6-audit
