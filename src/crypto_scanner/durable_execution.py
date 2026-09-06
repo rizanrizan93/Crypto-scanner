@@ -11,9 +11,9 @@ from crypto_scanner.binance.private_write import (
     AlgoSubmissionAck,
     BinanceOrderSubmissionError,
     BinanceTestnetOrderClient,
-    SplitProtectionPlan,
+    ProtectionPlan,
     UnknownSubmissionOutcome,
-    build_split_protection_plan,
+    build_protection_plan,
 )
 from crypto_scanner.execution_plan import (
     EntryOrderPlan,
@@ -67,6 +67,8 @@ class DurableExecutionCoordinator:
 
     Submission is never retried here. Unknown write outcomes are persisted as such and
     must be reconciled by deterministic client id before a later recovery process acts.
+    TP1 remains durable geometry only until partial-exit stop resizing is implemented;
+    exchange-side protection is one full-size SL plus one full-size TP2.
     """
 
     def __init__(
@@ -139,21 +141,15 @@ class DurableExecutionCoordinator:
         self,
         plan: EntryOrderPlan,
         filled_qty: Decimal,
-        instrument: InstrumentInfo,
-    ) -> tuple[SplitProtectionPlan, AlgoSubmissionAck, AlgoSubmissionAck | None, AlgoSubmissionAck]:
-        protection = build_split_protection_plan(plan, filled_qty, instrument)
+    ) -> tuple[ProtectionPlan, AlgoSubmissionAck, AlgoSubmissionAck]:
+        protection = build_protection_plan(plan, filled_qty)
 
-        stop_ack = self.writer.submit_conditional_exit(protection.stop_loss)
+        stop_ack = self.writer.submit_stop_loss(protection)
         self._verify_algo_new(stop_ack)
 
-        tp1_ack: AlgoSubmissionAck | None = None
-        if protection.take_profit_1 is not None:
-            tp1_ack = self.writer.submit_conditional_exit(protection.take_profit_1)
-            self._verify_algo_new(tp1_ack)
-
-        tp2_ack = self.writer.submit_conditional_exit(protection.take_profit_2)
+        tp2_ack = self.writer.submit_take_profit(protection)
         self._verify_algo_new(tp2_ack)
-        return protection, stop_ack, tp1_ack, tp2_ack
+        return protection, stop_ack, tp2_ack
 
     def execute(
         self,
@@ -230,11 +226,7 @@ class DurableExecutionCoordinator:
             raise DurableExecutionError("reconciled entry quantity is invalid")
 
         # Safety before analytics: install exchange-side protection immediately after fill.
-        protection, stop_ack, tp1_ack, tp2_ack = self._install_protection(
-            plan,
-            filled_qty,
-            instrument,
-        )
+        _protection, stop_ack, tp2_ack = self._install_protection(plan, filled_qty)
 
         fills = self._entry_fills(order)
         for fill in fills:
@@ -286,6 +278,6 @@ class DurableExecutionCoordinator:
             average_entry_price=average_entry_price,
             leverage=leverage,
             stop_client_algo_id=stop_ack.client_algo_id,
-            tp1_client_algo_id=(tp1_ack.client_algo_id if tp1_ack is not None else None),
+            tp1_client_algo_id=None,
             tp2_client_algo_id=tp2_ack.client_algo_id,
         )
