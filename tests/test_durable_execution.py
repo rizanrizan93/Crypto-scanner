@@ -195,9 +195,15 @@ class FakePrivate:
 
 
 class FakeWriter:
-    def __init__(self, *, unknown_entry: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        unknown_entry: bool = False,
+        unknown_stop: bool = False,
+    ) -> None:
         self.calls: list[str] = []
         self.unknown_entry = unknown_entry
+        self.unknown_stop = unknown_stop
 
     def set_leverage(self, symbol: str, leverage: int) -> int:
         self.calls.append(f"leverage:{symbol}:{leverage}")
@@ -216,6 +222,8 @@ class FakeWriter:
 
     def submit_stop_loss(self, protection) -> AlgoSubmissionAck:
         self.calls.append("STOP_MARKET")
+        if self.unknown_stop:
+            raise UnknownSubmissionOutcome(protection.stop_client_algo_id, "unknown stop")
         return AlgoSubmissionAck(
             algo_id="algo-stop",
             client_algo_id=protection.stop_client_algo_id,
@@ -335,6 +343,29 @@ def test_unknown_entry_outcome_is_persisted_and_never_retried() -> None:
     assert writer.calls.count("entry") == 1
     assert private.order_reads == 0
     assert linkage.order_statuses == ["PLANNED", "UNKNOWN_OUTCOME"]
+    assert not linkage.position_saved
+
+
+def test_unknown_protection_outcome_is_persisted_after_confirmed_fill() -> None:
+    private = FakePrivate()
+    writer = FakeWriter(unknown_stop=True)
+    linkage = FakeLinkage()
+    coordinator = _coordinator(
+        arm=TestnetExecutionArm(True),
+        private=private,
+        writer=writer,
+        linkage=linkage,
+    )
+
+    with pytest.raises(UnknownSubmissionOutcome):
+        coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
+
+    assert writer.calls[1:] == ["entry", "STOP_MARKET"]
+    assert linkage.order_statuses == [
+        "PLANNED",
+        "PENDING_RECONCILIATION",
+        "FILLED_PROTECTION_UNKNOWN",
+    ]
     assert not linkage.position_saved
 
 

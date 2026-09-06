@@ -30,6 +30,7 @@ crypto-scanner-private-ws-probe = "crypto_scanner.private_ws_probe:main"
 crypto-scanner-phase7-audit = "crypto_scanner.phase7_audit:main"
 crypto-scanner-persistence-smoke = "crypto_scanner.persistence_smoke:main"
 crypto-scanner-linkage-cycle = "crypto_scanner.linkage_cycle:main"
+crypto-scanner-cycle = "crypto_scanner.scanner_cycle:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_scanner"]

@@ -88,7 +88,7 @@ def test_discovery_and_execution_ready_signal_are_durably_linked() -> None:
     )
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         linkage = DurableTradeLinkage(_config(), client=client)
-        run_id = linkage.save_discovery_run(run)
+        run_id = linkage.save_discovery_run(run, execution_armed=True)
         signal_id = linkage.save_execution_ready_signal(
             run_id=run_id,
             candidate=_candidate(),
@@ -106,8 +106,10 @@ def test_discovery_and_execution_ready_signal_are_durably_linked() -> None:
         "/rest/v1/signals",
         "/rest/v1/signal_geometry",
     ]
+    scanner_run_payload = writes[0][1][0]
     signal_payload = writes[2][1][0]
     geometry_payload = writes[3][1][0]
+    assert scanner_run_payload["execution_armed"] is True
     assert signal_payload["signal_id"] == signal_id
     assert signal_payload["setup"] == "HL_PULLBACK"
     assert signal_payload["regime"] == "TREND"
