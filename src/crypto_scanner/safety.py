@@ -45,7 +45,7 @@ class SafetyContract:
     environment: ExecutionEnvironment = ExecutionEnvironment.TESTNET
     live_trading_locked: bool = True
     max_risk_per_trade: float = 0.01
-    max_concurrent_positions: int = 3
+    max_concurrent_positions: int = 10
     one_position_per_symbol: bool = True
     max_leverage: float = 3.0
 
@@ -60,8 +60,8 @@ class SafetyContract:
             raise SafetyError("live_trading_locked must remain true")
         if not 0 < self.max_risk_per_trade <= 0.01:
             raise SafetyError("max_risk_per_trade must be > 0 and <= 1%")
-        if not 1 <= self.max_concurrent_positions <= 3:
-            raise SafetyError("max_concurrent_positions must be between 1 and 3")
+        if not 1 <= self.max_concurrent_positions <= 10:
+            raise SafetyError("max_concurrent_positions must be between 1 and 10")
         if self.one_position_per_symbol is not True:
             raise SafetyError("one-position-per-symbol is mandatory")
         if not 1 <= self.max_leverage <= 3:
