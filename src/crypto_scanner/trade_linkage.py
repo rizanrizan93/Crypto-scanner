@@ -16,7 +16,6 @@ from crypto_scanner.persistence import (
     PersistenceError,
     SupabasePersistenceConfig,
     SupabaseRestClient,
-    _json_value,
     _without_none,
 )
 
@@ -372,7 +371,7 @@ class DurableTradeLinkage:
                     "leverage": position.leverage,
                     "opened_at_ms": entry_time_ms,
                     "latest_mark_price": mark,
-                    "unrealized_pnl": position.unrealized_pnl,
+                    "unrealized_pnl": position.unrealised_pnl,
                     "updated_at_ms": max(entry_time_ms, position.updated_time_ms or entry_time_ms),
                     "source": {
                         "identity_chain": "DISCOVERY_SIGNAL_GEOMETRY_ORDER_FILL_POSITION",
@@ -448,12 +447,7 @@ class DurableTradeLinkage:
             and geometry_stop is not None
             and initial_stop == geometry_stop
         )
-        eligible = bool(
-            setup
-            and regime
-            and status == "EXECUTION_READY"
-            and stop_matches
-        )
+        eligible = bool(setup and regime and status == "EXECUTION_READY" and stop_matches)
         return DurableTradeContext(
             position_id=position_id,
             signal_id=signal_id,
@@ -462,6 +456,3 @@ class DurableTradeLinkage:
             regime=regime,
             calibration_eligible=eligible,
         )
-
-    def raw_value(self, value: object) -> object:
-        return _json_value(value)
