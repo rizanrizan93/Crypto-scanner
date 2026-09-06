@@ -79,6 +79,7 @@ class ScannerCycleResult:
     readiness: tuple[dict[str, object], ...]
     microstructure_failures: tuple[dict[str, str], ...]
     execution_skips: tuple[dict[str, str], ...]
+    execution_attempted: bool
     orders_submitted: int
     execution_result: DurableExecutionResult | None
     execution_error: str | None
@@ -183,6 +184,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
     execution_skips: list[dict[str, str]] = []
     execution_result: DurableExecutionResult | None = None
     execution_error: str | None = None
+    execution_attempted = False
     orders_submitted = 0
 
     with (
@@ -319,6 +321,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
                 snapshot = fresh_snapshot
 
         if selected is not None:
+            execution_attempted = True
             try:
                 with BinanceTestnetOrderClient(
                     credentials,
@@ -337,6 +340,9 @@ def run_scanner_cycle() -> ScannerCycleResult:
                         signal_id=selected.signal_id,
                         instrument=selected.instrument,
                     )
+                # This means a fully reconciled entry reached durable protected state.
+                # Unknown network outcomes remain orders_submitted=0 and are surfaced
+                # separately through execution_attempted + execution_error.
                 orders_submitted = 1
             except UnknownSubmissionOutcome as exc:
                 execution_error = f"UNKNOWN_SUBMISSION_OUTCOME:{exc.client_id}:{exc}"
@@ -376,6 +382,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
         readiness=tuple(readiness_rows),
         microstructure_failures=tuple(micro_failures),
         execution_skips=tuple(execution_skips),
+        execution_attempted=execution_attempted,
         orders_submitted=orders_submitted,
         execution_result=execution_result,
         execution_error=execution_error,
