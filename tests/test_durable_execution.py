@@ -4,7 +4,12 @@ from decimal import Decimal
 
 import pytest
 
-from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot, PositionSnapshot, WalletSnapshot
+from crypto_scanner.binance.models import (
+    InstrumentInfo,
+    OrderSnapshot,
+    PositionSnapshot,
+    WalletSnapshot,
+)
 from crypto_scanner.binance.private_rest import AlgoOrderSnapshot, UserTradeFill
 from crypto_scanner.binance.private_write import (
     AlgoSubmissionAck,
