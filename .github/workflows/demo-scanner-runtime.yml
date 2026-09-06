@@ -39,6 +39,9 @@ jobs:
           test -n "${BINANCE_DEMO_API_SECRET}"
           test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
           test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Heartbeat running
+        continue-on-error: true
+        run: crypto-scanner-heartbeat SCANNER_CYCLE RUNNING
       - name: Disarmed Phase 6 pre-audit
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
@@ -52,3 +55,11 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
+      - name: Heartbeat success
+        if: success()
+        continue-on-error: true
+        run: crypto-scanner-heartbeat SCANNER_CYCLE SUCCESS
+      - name: Heartbeat failed
+        if: failure()
+        continue-on-error: true
+        run: crypto-scanner-heartbeat SCANNER_CYCLE FAILED
