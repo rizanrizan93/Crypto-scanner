@@ -2,6 +2,11 @@ name: Crypto Scanner Cycle Observe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - verify/scanner-cycle-observe
+    paths:
+      - .github/workflows/scanner-cycle-observe.yml
 
 permissions:
   contents: read
