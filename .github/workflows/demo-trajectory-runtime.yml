@@ -2,7 +2,7 @@ name: Crypto Scanner Demo Trajectory Runtime
 
 on:
   schedule:
-    - cron: "2,17,32,47 * * * *"
+    - cron: "6,21,36,51 * * * *"
   workflow_dispatch:
 
 permissions:
