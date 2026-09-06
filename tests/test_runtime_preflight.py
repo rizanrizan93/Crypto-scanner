@@ -6,6 +6,7 @@ import pytest
 
 from crypto_scanner.binance.auth import BinanceDemoCredentials
 from crypto_scanner.binance.models import InstrumentInfo, TickerSnapshot, WalletSnapshot
+from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.execution_plan import TestnetExecutionArm
 from crypto_scanner.runtime_preflight import RuntimePreflightError, run_runtime_preflight
 
@@ -124,11 +125,5 @@ def test_preflight_passes_only_disarmed_public_and_private_reads(monkeypatch) ->
     assert report["preflight_status"] == "PASS_DISARMED"
     assert report["testnet_execution_armed"] is False
     assert report["private_account"]["total_equity"] == "1000"
-    assert set(report["public_symbols"]) == {
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-        "XRPUSDT",
-        "BNBUSDT",
-    }
+    assert set(report["public_symbols"]) == set(DEFAULT_UNIVERSE)
     assert "secret" not in str(report).lower()

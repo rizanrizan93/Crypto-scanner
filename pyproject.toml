@@ -32,6 +32,7 @@ crypto-scanner-phase7-audit = "crypto_scanner.phase7_audit:main"
 crypto-scanner-persistence-smoke = "crypto_scanner.persistence_smoke:main"
 crypto-scanner-linkage-cycle = "crypto_scanner.linkage_cycle:main"
 crypto-scanner-cycle = "crypto_scanner.scanner_cycle:main"
+crypto-scanner-calibrate = "crypto_scanner.calibration:main"
 crypto-scanner-heartbeat = "crypto_scanner.runtime_health:main"
 
 [tool.hatch.build.targets.wheel]

@@ -40,6 +40,7 @@ from crypto_scanner.lifecycle import (
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.position_manager import audit_all_protection
 from crypto_scanner.safety import SafetyContract
+from crypto_scanner.strategy_params import load_strategy_parameters
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _HIGH_CORRELATION_BUCKET = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
@@ -176,6 +177,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
     persistence_config = SupabasePersistenceConfig.from_environment()
     if not persistence_config.enabled:
         raise ScannerCycleError("scanner cycle requires dedicated Crypto Scanner Supabase")
+    strategy = load_strategy_parameters(persistence_config)
     credentials = BinanceDemoCredentials.from_environment()
 
     micro_failures: list[dict[str, str]] = []
@@ -240,6 +242,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
                         orderbook_healthy=True,
                     ),
                     now_ms=now_ms,
+                    strategy=strategy,
                 )
                 signal_id: str | None = None
                 if decision.execution_ready:
