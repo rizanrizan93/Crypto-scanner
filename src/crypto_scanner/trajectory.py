@@ -8,7 +8,6 @@ from crypto_scanner.binance.models import Candle, PositionSnapshot
 from crypto_scanner.binance.private_rest import UserTradeFill
 from crypto_scanner.closed_trades import TradeDirection
 
-
 _ONE_MINUTE_MS = 60_000
 
 
