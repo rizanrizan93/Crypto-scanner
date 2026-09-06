@@ -161,7 +161,9 @@ def main() -> None:
         if open_orders:
             raise ExecutionSmokeError("execution smoke requires zero pre-existing open orders")
         if private.get_position_mode_is_hedged():
-            raise ExecutionSmokeError("execution smoke requires Binance One-way Mode, not Hedge Mode")
+            raise ExecutionSmokeError(
+                "execution smoke requires Binance One-way Mode, not Hedge Mode"
+            )
 
         confirmed_leverage = writer.set_leverage(SMOKE_SYMBOL, 1)
         if confirmed_leverage != 1:
