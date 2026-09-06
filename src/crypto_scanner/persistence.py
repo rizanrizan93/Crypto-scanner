@@ -5,7 +5,6 @@ import os
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -51,7 +50,9 @@ class SupabasePersistenceConfig:
         if not parsed.hostname or not parsed.hostname.endswith(".supabase.co"):
             raise PersistenceError("Crypto Scanner Supabase URL must be a supabase.co project URL")
         if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise PersistenceError("Crypto Scanner Supabase URL must not contain path/query/fragment")
+            raise PersistenceError(
+                "Crypto Scanner Supabase URL must not contain path/query/fragment"
+            )
 
 
 def _json_value(value: object) -> object:
@@ -128,7 +129,9 @@ class SupabaseRestClient:
             return
         if not table.replace("_", "").isalnum():
             raise PersistenceError("invalid persistence table name")
-        if not on_conflict or any(not column.replace("_", "").isalnum() for column in on_conflict):
+        if not on_conflict or any(
+            not column.replace("_", "").isalnum() for column in on_conflict
+        ):
             raise PersistenceError("invalid persistence conflict target")
         url = f"{self.base_url}/rest/v1/{table}"
         params = {"on_conflict": ",".join(on_conflict)}
