@@ -8,7 +8,6 @@ from crypto_scanner.binance.public_rest import (
     BinancePublicApiError,
 )
 
-
 _MINUTE_MS = 60_000
 
 
