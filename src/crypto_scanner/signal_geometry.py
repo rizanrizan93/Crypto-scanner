@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
+from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.structure import (
     StructuralBias,
     StructureEvent,
@@ -77,6 +78,7 @@ def _choose_mode(
     candles_3m: tuple[Candle, ...],
     current_price: Decimal,
     atr3: Decimal,
+    strategy: StrategyParameters,
 ) -> tuple[EntryMode, Decimal, Decimal | None]:
     structure = analyze_structure(candles_3m, swing_window=2)
     closes = tuple(candle.close for candle in candles_3m)
@@ -91,7 +93,7 @@ def _choose_mode(
             distance = current_price - breakout
             if distance <= atr3 * Decimal("0.35"):
                 return EntryMode.BREAKOUT_RETEST, reference, breakout
-            if distance <= atr3 * Decimal("0.80"):
+            if distance <= atr3 * strategy.max_chase_atr:
                 return EntryMode.MOMENTUM_CONTINUATION, reference, breakout
             raise GeometryError("long quote is chasing too far above breakout")
         valid_pullback = (
@@ -110,7 +112,7 @@ def _choose_mode(
         distance = breakout - current_price
         if distance <= atr3 * Decimal("0.35"):
             return EntryMode.BREAKOUT_RETEST, reference, breakout
-        if distance <= atr3 * Decimal("0.80"):
+        if distance <= atr3 * strategy.max_chase_atr:
             return EntryMode.MOMENTUM_CONTINUATION, reference, breakout
         raise GeometryError("short quote is chasing too far below breakout")
     valid_pullback = (
@@ -172,7 +174,10 @@ def build_signal_geometry(
     candles_5m: tuple[Candle, ...],
     ticker: TickerSnapshot,
     instrument: InstrumentInfo,
+    strategy: StrategyParameters | None = None,
 ) -> SignalGeometry:
+    strategy = strategy or DEFAULT_STRATEGY_PARAMETERS
+    strategy.validate()
     direction = _candidate_direction(candidate)
     symbol = candidate.symbol
     _validate_instrument(instrument, symbol)
@@ -202,9 +207,10 @@ def build_signal_geometry(
         candles_3m,
         entry,
         atr3,
+        strategy,
     )
 
-    stop_buffer = max(instrument.tick_size * Decimal(2), atr3 * Decimal("0.15"))
+    stop_buffer = max(instrument.tick_size * Decimal(2), atr3 * strategy.stop_buffer_atr)
     if direction is TradeDirection.LONG:
         stop = _round_price(reference_swing - stop_buffer, instrument.tick_size, up=False)
         risk = entry - stop
@@ -227,11 +233,32 @@ def build_signal_geometry(
         entry,
         instrument.tick_size,
     )
+
+    # Calibration may shorten only an excessively distant structural TP2. It can never
+    # reduce TP2 below the original 2.00R quality floor.
+    if strategy.tp2_cap_rr is not None:
+        if direction is TradeDirection.LONG:
+            capped = _round_price(
+                entry + risk * strategy.tp2_cap_rr,
+                instrument.tick_size,
+                up=False,
+            )
+            if capped < tp2:
+                tp2 = capped
+        else:
+            capped = _round_price(
+                entry - risk * strategy.tp2_cap_rr,
+                instrument.tick_size,
+                up=True,
+            )
+            if capped > tp2:
+                tp2 = capped
+
     rr1 = abs(tp1 - entry) / risk
     rr2 = abs(tp2 - entry) / risk
-    if rr1 < Decimal("1.20"):
+    if rr1 < strategy.min_rr_tp1:
         raise GeometryError("nearest structural TP has poor reward/risk")
-    if rr2 < Decimal("2.00"):
+    if rr2 < strategy.min_rr_tp2:
         raise GeometryError("secondary structural TP has poor reward/risk")
 
     return SignalGeometry(
