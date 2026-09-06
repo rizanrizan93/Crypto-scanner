@@ -32,7 +32,7 @@ class DurableTradeContext:
 
 def stable_run_id(run: DiscoveryRun) -> str:
     digest = hashlib.sha256(
-        f"BINANCE|DEMO|DISCOVERY|{run.started_at_ms}".encode("utf-8")
+        f"BINANCE|DEMO|DISCOVERY|{run.started_at_ms}".encode()
     ).hexdigest()[:24]
     return f"run-{digest}"
 
@@ -45,7 +45,7 @@ def stable_signal_id(
 ) -> str:
     raw = (
         f"{run_id}|{candidate.symbol}|{candidate.direction.value}|{candidate_timestamp_ms}"
-    ).encode("utf-8")
+    ).encode()
     return f"sig-{hashlib.sha256(raw).hexdigest()[:32]}"
 
 
