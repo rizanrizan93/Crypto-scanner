@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal
 from statistics import median
-from typing import Any
 
 import httpx
 
@@ -55,6 +54,10 @@ def _decimal_or_none(value: object) -> Decimal | None:
 
 def _clamp(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
     return min(high, max(low, value))
+
+
+def _round_to_step(value: Decimal, step: Decimal) -> Decimal:
+    return (value / step).quantize(Decimal("1")) * step
 
 
 def _tier(sample_size: int) -> tuple[str, Decimal, Decimal, int]:
@@ -184,18 +187,23 @@ def propose_parameters(
     # peak between 2R and 2.6R, cap only excessively distant structural TP2 at a >=2R target.
     if poor and metrics.median_mfe_r is not None:
         if Decimal("2.00") <= metrics.median_mfe_r < Decimal("2.60"):
-            proposed_cap = _clamp(
+            raw_cap = _clamp(
                 metrics.median_mfe_r,
                 Decimal("2.00"),
                 Decimal("2.40"),
-            ).quantize(Decimal("0.05"))
+            )
+            proposed_cap = _round_to_step(raw_cap, Decimal("0.05"))
             if tp2_cap != proposed_cap:
                 tp2_cap = proposed_cap
                 reasons.append("CAP_DISTANT_TP2_TO_OBSERVED_MFE")
-    elif good and metrics.median_mfe_r is not None and metrics.median_mfe_r >= Decimal("2.80"):
-        if tp2_cap is not None:
-            tp2_cap = None
-            reasons.append("RESTORE_FULL_STRUCTURAL_TP2_ON_STRONG_MFE")
+    elif (
+        good
+        and metrics.median_mfe_r is not None
+        and metrics.median_mfe_r >= Decimal("2.80")
+        and tp2_cap is not None
+    ):
+        tp2_cap = None
+        reasons.append("RESTORE_FULL_STRUCTURAL_TP2_ON_STRONG_MFE")
 
     proposed = StrategyParameters(
         stop_buffer_atr=stop_buffer,
@@ -373,8 +381,9 @@ def run_calibration() -> dict[str, object]:
             on_conflict=("state_key",),
         )
 
+    status = "PASS_CALIBRATION_APPLIED" if proposal.applied else "PASS_CALIBRATION_OBSERVE"
     return {
-        "status": "PASS_CALIBRATION_APPLIED" if proposal.applied else "PASS_CALIBRATION_OBSERVE",
+        "status": status,
         "sample_size": metrics.sample_size,
         "tier": proposal.tier,
         "applied": proposal.applied,
