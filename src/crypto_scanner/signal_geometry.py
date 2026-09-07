@@ -15,6 +15,9 @@ from crypto_scanner.structure import (
 )
 from crypto_scanner.technical import atr, ema, validate_candles
 
+_DEMO_SCALP_EXTREME_LOOKBACK = 8
+_DEMO_SCALP_MAX_STOP_ATR = Decimal("1.50")
+
 
 class EntryMode(StrEnum):
     HL_PULLBACK = "HL_PULLBACK"
@@ -22,6 +25,7 @@ class EntryMode(StrEnum):
     MOMENTUM_CONTINUATION = "MOMENTUM_CONTINUATION"
     BREAKOUT_RETEST = "BREAKOUT_RETEST"
     REVERSAL = "REVERSAL"
+    TECHNICAL_SCALP = "TECHNICAL_SCALP"
 
 
 class GeometryError(RuntimeError):
@@ -71,6 +75,21 @@ def _validate_instrument(instrument: InstrumentInfo, symbol: str) -> None:
         raise GeometryError("instrument is not USDT settled")
     if instrument.tick_size <= 0 or instrument.qty_step <= 0:
         raise GeometryError("instrument contract precision is invalid")
+
+
+def _validate_market_inputs(
+    candidate: DiscoveryResult,
+    ticker: TickerSnapshot,
+    instrument: InstrumentInfo,
+) -> tuple[TradeDirection, str]:
+    direction = _candidate_direction(candidate)
+    symbol = candidate.symbol
+    _validate_instrument(instrument, symbol)
+    if ticker.symbol != symbol:
+        raise GeometryError("ticker symbol does not match candidate")
+    if ticker.ask_price <= ticker.bid_price:
+        raise GeometryError("ticker bid/ask is invalid")
+    return direction, symbol
 
 
 def _choose_mode(
@@ -167,6 +186,126 @@ def _structural_targets(
     )
 
 
+def _demo_scalp_targets(
+    direction: TradeDirection,
+    entry: Decimal,
+    risk: Decimal,
+    tick_size: Decimal,
+    strategy: StrategyParameters,
+) -> tuple[Decimal, Decimal]:
+    if direction is TradeDirection.LONG:
+        return (
+            _round_price(entry + risk * strategy.min_rr_tp1, tick_size, up=True),
+            _round_price(entry + risk * strategy.min_rr_tp2, tick_size, up=True),
+        )
+    return (
+        _round_price(entry - risk * strategy.min_rr_tp1, tick_size, up=False),
+        _round_price(entry - risk * strategy.min_rr_tp2, tick_size, up=False),
+    )
+
+
+def build_demo_technical_scalp_geometry(
+    candidate: DiscoveryResult,
+    *,
+    candles_3m: tuple[Candle, ...],
+    candles_5m: tuple[Candle, ...],
+    ticker: TickerSnapshot,
+    instrument: InstrumentInfo,
+    strategy: StrategyParameters | None = None,
+) -> SignalGeometry:
+    """Build a bounded technical-first geometry for Demo 15m acquisition only.
+
+    The caller is responsible for enforcing Demo-only and 15m confirmation gates.
+    This fallback intentionally does not invent structural swing/liquidity evidence.
+    It requires current 3m/5m directional confirmation, keeps the calibrated chase
+    cap, anchors the stop to a recent adverse 3m extreme, and derives TP1/TP2 from
+    the existing hard RR floors.
+    """
+    strategy = strategy or DEFAULT_STRATEGY_PARAMETERS
+    strategy.validate()
+    direction, symbol = _validate_market_inputs(candidate, ticker, instrument)
+    validate_candles(candles_3m, min_count=100)
+    validate_candles(candles_5m, min_count=100)
+
+    atr3 = atr(candles_3m, 14)
+    if atr3 <= 0:
+        raise GeometryError("3m ATR must be positive")
+
+    closes3 = tuple(candle.close for candle in candles_3m)
+    closes5 = tuple(candle.close for candle in candles_5m)
+    ema20_3m = ema(closes3, 20)
+    ema20_5m = ema(closes5, 20)
+    momentum3 = closes3[-1] - closes3[-4]
+    entry = ticker.ask_price if direction is TradeDirection.LONG else ticker.bid_price
+
+    if direction is TradeDirection.LONG:
+        if entry <= ema20_3m or closes5[-1] <= ema20_5m or momentum3 <= 0:
+            raise GeometryError("Demo LONG fallback lacks current 3m/5m confirmation")
+    else:
+        if entry >= ema20_3m or closes5[-1] >= ema20_5m or momentum3 >= 0:
+            raise GeometryError("Demo SHORT fallback lacks current 3m/5m confirmation")
+
+    chase = abs(entry - ema20_3m) / atr3
+    if chase > strategy.max_chase_atr:
+        raise GeometryError("Demo fallback quote exceeds calibrated chase cap")
+
+    completed_recent = candles_3m[-(_DEMO_SCALP_EXTREME_LOOKBACK + 1) : -1]
+    if len(completed_recent) < _DEMO_SCALP_EXTREME_LOOKBACK:
+        raise GeometryError("Demo fallback lacks recent completed 3m candles")
+    stop_buffer = max(instrument.tick_size * Decimal(2), atr3 * strategy.stop_buffer_atr)
+
+    if direction is TradeDirection.LONG:
+        reference = min(candle.low for candle in completed_recent)
+        stop = _round_price(reference - stop_buffer, instrument.tick_size, up=False)
+        risk = entry - stop
+        if risk <= 0:
+            raise GeometryError("Demo LONG fallback stop is not below entry")
+    else:
+        reference = max(candle.high for candle in completed_recent)
+        stop = _round_price(reference + stop_buffer, instrument.tick_size, up=True)
+        risk = stop - entry
+        if risk <= 0:
+            raise GeometryError("Demo SHORT fallback stop is not above entry")
+
+    if risk < instrument.tick_size * Decimal(3):
+        raise GeometryError("Demo fallback initial risk is too small relative to tick size")
+    if risk / atr3 > _DEMO_SCALP_MAX_STOP_ATR:
+        raise GeometryError("Demo fallback stop exceeds 1.50 ATR")
+
+    tp1, tp2 = _demo_scalp_targets(
+        direction,
+        entry,
+        risk,
+        instrument.tick_size,
+        strategy,
+    )
+    rr1 = abs(tp1 - entry) / risk
+    rr2 = abs(tp2 - entry) / risk
+    if rr1 < strategy.min_rr_tp1 or rr2 < strategy.min_rr_tp2:
+        raise GeometryError("Demo fallback reward/risk floor not met")
+    if direction is TradeDirection.LONG and not stop < entry < tp1 < tp2:
+        raise GeometryError("Demo LONG fallback geometry ordering is invalid")
+    if direction is TradeDirection.SHORT and not stop > entry > tp1 > tp2:
+        raise GeometryError("Demo SHORT fallback geometry ordering is invalid")
+
+    return SignalGeometry(
+        symbol=symbol,
+        direction=direction,
+        entry_mode=EntryMode.TECHNICAL_SCALP,
+        entry_price=entry,
+        stop_loss=stop,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        initial_risk=risk,
+        rr_tp1=rr1,
+        rr_tp2=rr2,
+        reference_swing=reference,
+        breakout_level=None,
+        atr_3m=atr3,
+        chase_atr=chase,
+    )
+
+
 def build_signal_geometry(
     candidate: DiscoveryResult,
     *,
@@ -178,13 +317,7 @@ def build_signal_geometry(
 ) -> SignalGeometry:
     strategy = strategy or DEFAULT_STRATEGY_PARAMETERS
     strategy.validate()
-    direction = _candidate_direction(candidate)
-    symbol = candidate.symbol
-    _validate_instrument(instrument, symbol)
-    if ticker.symbol != symbol:
-        raise GeometryError("ticker symbol does not match candidate")
-    if ticker.ask_price <= ticker.bid_price:
-        raise GeometryError("ticker bid/ask is invalid")
+    direction, symbol = _validate_market_inputs(candidate, ticker, instrument)
 
     validate_candles(candles_3m, min_count=100)
     validate_candles(candles_5m, min_count=100)
