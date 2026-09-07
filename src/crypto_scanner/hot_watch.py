@@ -18,7 +18,8 @@ FAST_WATCH_MAX_ROUNDS = 4
 FAST_WATCH_INTERVAL_SECONDS = 60.0
 CANDIDATE_TTL_MS = 5 * 60_000
 DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
-_DEMO_ACQUISITION_MIN_SCORE = Decimal("60")
+_DEMO_ACQUISITION_SCORE_FLOOR = Decimal("50")
+_DEMO_ACQUISITION_MIN_SEPARATION = Decimal("5")
 _DEMO_ACQUISITION_MIN_COVERAGE = Decimal("0.72")
 
 
@@ -73,18 +74,35 @@ def _demo_acquisition_enabled() -> bool:
     return os.getenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "").strip().upper() == "ENABLED"
 
 
+def _demo_acquisition_direction(result: DiscoveryResult) -> TradeDirection:
+    if result.long_score <= _DEMO_ACQUISITION_SCORE_FLOOR and result.short_score <= _DEMO_ACQUISITION_SCORE_FLOOR:
+        return TradeDirection.NEUTRAL
+    separation = abs(result.long_score - result.short_score)
+    if separation < _DEMO_ACQUISITION_MIN_SEPARATION:
+        return TradeDirection.NEUTRAL
+    if result.long_score > result.short_score:
+        return TradeDirection.LONG
+    return TradeDirection.SHORT
+
+
 def _eligible_demo_watch(result: DiscoveryResult) -> bool:
+    direction = _demo_acquisition_direction(result)
+    selected_score = (
+        result.long_score if direction is TradeDirection.LONG else result.short_score
+    )
     return (
         result.status is DiscoveryStatus.WATCH
-        and result.direction in {TradeDirection.LONG, TradeDirection.SHORT}
-        and result.ranking_score >= _DEMO_ACQUISITION_MIN_SCORE
+        and direction in {TradeDirection.LONG, TradeDirection.SHORT}
+        and selected_score > _DEMO_ACQUISITION_SCORE_FLOOR
         and result.evidence_coverage >= _DEMO_ACQUISITION_MIN_COVERAGE
     )
 
 
 def _promote_demo_watch(result: DiscoveryResult) -> DiscoveryResult:
+    direction = _demo_acquisition_direction(result)
     return replace(
         result,
+        direction=direction,
         status=DiscoveryStatus.CANDIDATE,
         reasons=tuple(dict.fromkeys((*result.reasons, DEMO_ACQUISITION_REASON))),
     )
