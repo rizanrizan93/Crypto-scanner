@@ -41,6 +41,8 @@ jobs:
         run: crypto-scanner-heartbeat CALIBRATION_CYCLE RUNNING
       - name: Calibrate bounded strategy parameters
         run: crypto-scanner-calibrate
+      - name: Analyze research factor attribution
+        run: crypto-scanner-research-attribution
       - name: Heartbeat success
         if: success()
         continue-on-error: true
