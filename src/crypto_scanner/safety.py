@@ -45,13 +45,16 @@ class SafetyContract:
     environment: ExecutionEnvironment = ExecutionEnvironment.TESTNET
     live_trading_locked: bool = True
     max_risk_per_trade: float = 0.01
-    # This is the portfolio-wide logical risk-slot cap. Every new stack layer consumes
-    # one slot even though Binance One-way Mode nets same-symbol layers into one position.
+    # Ten is a logical risk-slot ceiling, not merely a count of Binance net symbols.
     max_concurrent_positions: int = 10
+    # At the default 0.5% layer risk this caps intended stop risk at 5% portfolio-wide.
+    # It also prevents ten independently maxed 1% layers from silently reaching 10%.
+    max_portfolio_risk_fraction: float = 0.05
     max_layers_per_symbol: int = 3
+    max_high_correlation_risk_slots: int = 2
     profitable_stacking_enabled: bool = True
-    # Retained for constructor/backward compatibility. The production contract now
-    # permits same-symbol exposure only through the bounded profitable-stacking gates.
+    # Retained for constructor/backward compatibility. Same-symbol exposure is legal
+    # only through the bounded profitable-stacking path.
     one_position_per_symbol: bool = False
     max_leverage: float = 3.0
 
@@ -68,8 +71,14 @@ class SafetyContract:
             raise SafetyError("max_risk_per_trade must be > 0 and <= 1%")
         if not 1 <= self.max_concurrent_positions <= 10:
             raise SafetyError("max_concurrent_positions must be between 1 and 10 risk slots")
+        if not 0 < self.max_portfolio_risk_fraction <= 0.05:
+            raise SafetyError("max_portfolio_risk_fraction must be > 0 and <= 5%")
+        if self.max_portfolio_risk_fraction < self.max_risk_per_trade:
+            raise SafetyError("portfolio risk cap cannot be below per-trade risk cap")
         if not 1 <= self.max_layers_per_symbol <= 3:
             raise SafetyError("max_layers_per_symbol must be between 1 and 3")
+        if not 1 <= self.max_high_correlation_risk_slots <= 2:
+            raise SafetyError("high-correlation BTC/ETH/SOL bucket may use at most two slots")
         if self.profitable_stacking_enabled:
             if self.one_position_per_symbol:
                 raise SafetyError(
