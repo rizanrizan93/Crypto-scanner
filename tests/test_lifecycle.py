@@ -10,11 +10,12 @@ from crypto_scanner.lifecycle import (
     LifecycleState,
     ReconciliationSeverity,
 )
+from crypto_scanner.safety import SafetyContract
 
 
-def _position(size: str = "3.6") -> PositionSnapshot:
+def _position(size: str = "3.6", symbol: str = "XRPUSDT") -> PositionSnapshot:
     return PositionSnapshot(
-        symbol="XRPUSDT",
+        symbol=symbol,
         side="Buy",
         size=Decimal(size),
         avg_price=Decimal("1.415"),
@@ -33,8 +34,8 @@ def _position(size: str = "3.6") -> PositionSnapshot:
     )
 
 
-def _snapshot(size: str = "3.6") -> AuthoritativeLifecycleSnapshot:
-    wallet = WalletSnapshot(
+def _wallet() -> WalletSnapshot:
+    return WalletSnapshot(
         account_type="FUTURES_DEMO",
         total_equity=Decimal("5000"),
         total_wallet_balance=Decimal("5000"),
@@ -43,8 +44,11 @@ def _snapshot(size: str = "3.6") -> AuthoritativeLifecycleSnapshot:
         total_perp_upl=Decimal("0"),
         coins=(),
     )
+
+
+def _snapshot(size: str = "3.6") -> AuthoritativeLifecycleSnapshot:
     return AuthoritativeLifecycleSnapshot(
-        wallet=wallet,
+        wallet=_wallet(),
         positions=(_position(size),),
         open_orders=(),
         open_algo_orders=(),
@@ -111,3 +115,33 @@ def test_expired_private_stream_blocks_new_entries() -> None:
     state.apply(ListenKeyExpiredEvent(event_time_ms=2000))
     issues = state.reconcile(snapshot)
     assert any(issue.code == "PRIVATE_STREAM_INVALID" for issue in issues)
+
+
+def test_ten_open_symbols_do_not_trip_legacy_three_position_bug() -> None:
+    positions = tuple(_position("1", f"SYM{i}USDT") for i in range(10))
+    snapshot = AuthoritativeLifecycleSnapshot(
+        wallet=_wallet(),
+        positions=positions,
+        open_orders=(),
+        open_algo_orders=(),
+        hedged_mode=False,
+    )
+    state = LifecycleState()
+    state.seed_from_recovery(snapshot)
+    issues = state.reconcile(snapshot, SafetyContract())
+    assert not any(issue.code == "MAX_POSITIONS_BREACHED" for issue in issues)
+
+
+def test_eleven_open_symbols_trip_contract_cap() -> None:
+    positions = tuple(_position("1", f"SYM{i}USDT") for i in range(11))
+    snapshot = AuthoritativeLifecycleSnapshot(
+        wallet=_wallet(),
+        positions=positions,
+        open_orders=(),
+        open_algo_orders=(),
+        hedged_mode=False,
+    )
+    state = LifecycleState()
+    state.seed_from_recovery(snapshot)
+    issues = state.reconcile(snapshot, SafetyContract())
+    assert any(issue.code == "MAX_POSITIONS_BREACHED" for issue in issues)

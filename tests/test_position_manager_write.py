@@ -4,11 +4,13 @@ import pytest
 
 from crypto_scanner.binance.models import PositionSnapshot
 from crypto_scanner.binance.private_rest import AlgoOrderSnapshot
+from crypto_scanner.binance.private_write import UnknownSubmissionOutcome
 from crypto_scanner.position_manager_write import (
     ManagementStatus,
     PositionManagerError,
     cleanup_scanner_orphans,
     reconcile_remaining_protection,
+    replace_aggregate_protection,
 )
 
 
@@ -22,7 +24,7 @@ def _position(qty: str = "2") -> PositionSnapshot:
         leverage=Decimal("1"),
         mark_price=Decimal("1.55"),
         liq_price=None,
-        unrealised_pnl=Decimal("0"),
+        unrealised_pnl=Decimal("0.10"),
         cum_realised_pnl=None,
         position_im=None,
         position_mm=None,
@@ -75,22 +77,43 @@ class FakeReader:
 
 
 class FakeWriter:
-    def __init__(self, reader: FakeReader) -> None:
+    def __init__(
+        self,
+        reader: FakeReader,
+        *,
+        unknown_submit_before_effect: bool = False,
+        unknown_submit_after_effect: bool = False,
+        unknown_cancel_before_effect: bool = False,
+        unknown_cancel_after_effect: bool = False,
+    ) -> None:
         self.reader = reader
         self.cancelled: list[str] = []
         self.submitted: list[str] = []
+        self.unknown_submit_before_effect = unknown_submit_before_effect
+        self.unknown_submit_after_effect = unknown_submit_after_effect
+        self.unknown_cancel_before_effect = unknown_cancel_before_effect
+        self.unknown_cancel_after_effect = unknown_cancel_after_effect
 
     def cancel_algo_order(self, *, symbol: str, client_algo_id: str) -> object:
         self.cancelled.append(client_algo_id)
+        if self.unknown_cancel_before_effect:
+            self.unknown_cancel_before_effect = False
+            raise UnknownSubmissionOutcome(client_algo_id, "cancel unknown before effect")
         self.reader.orders = [
             order
             for order in self.reader.orders
             if not (order.symbol == symbol and order.client_algo_id == client_algo_id)
         ]
+        if self.unknown_cancel_after_effect:
+            self.unknown_cancel_after_effect = False
+            raise UnknownSubmissionOutcome(client_algo_id, "cancel unknown after effect")
         return object()
 
     def submit_conditional_exit(self, plan: object) -> object:
         self.submitted.append(plan.client_algo_id)
+        if self.unknown_submit_before_effect:
+            self.unknown_submit_before_effect = False
+            raise UnknownSubmissionOutcome(plan.client_algo_id, "submit unknown before effect")
         self.reader.orders.append(
             AlgoOrderSnapshot(
                 algo_id=f"new-{plan.client_algo_id}",
@@ -105,6 +128,9 @@ class FakeWriter:
                 updated_time_ms=2000,
             )
         )
+        if self.unknown_submit_after_effect:
+            self.unknown_submit_after_effect = False
+            raise UnknownSubmissionOutcome(plan.client_algo_id, "submit unknown after effect")
         return object()
 
 
@@ -175,3 +201,117 @@ def test_exact_remaining_protection_needs_no_write() -> None:
     assert result.status is ManagementStatus.NO_ACTION
     assert writer.submitted == []
     assert writer.cancelled == []
+
+
+def test_aggregate_replacement_finishes_with_exactly_one_stop_and_tp() -> None:
+    reader = FakeReader(
+        (_position("3"),),
+        [
+            _algo("cs-sl-old", "STOP_MARKET", "2", "1.40"),
+            _algo("cs-tp2-old", "TAKE_PROFIT_MARKET", "2", "2.00"),
+        ],
+    )
+    writer = FakeWriter(reader)
+    replace_aggregate_protection(
+        reader,
+        writer,
+        symbol="XRPUSDT",
+        stop_trigger=Decimal("1.51"),
+        tp2_trigger=Decimal("2.10"),
+        management_seed="sig-new-layer",
+    )
+    assert len(reader.orders) == 2
+    assert {order.order_type for order in reader.orders} == {
+        "STOP_MARKET",
+        "TAKE_PROFIT_MARKET",
+    }
+    assert all(order.quantity == Decimal("3") for order in reader.orders)
+
+
+def test_unknown_submit_after_effect_is_reconciled_without_duplicate_retry() -> None:
+    reader = FakeReader(
+        (_position("3"),),
+        [
+            _algo("cs-sl-old", "STOP_MARKET", "2", "1.40"),
+            _algo("cs-tp2-old", "TAKE_PROFIT_MARKET", "2", "2.00"),
+        ],
+    )
+    writer = FakeWriter(reader, unknown_submit_after_effect=True)
+    replace_aggregate_protection(
+        reader,
+        writer,
+        symbol="XRPUSDT",
+        stop_trigger=Decimal("1.51"),
+        tp2_trigger=Decimal("2.10"),
+        management_seed="sig-unknown-submit",
+    )
+    assert len(writer.submitted) == 2
+    assert len(reader.orders) == 2
+
+
+def test_unknown_submit_without_effect_fails_closed_and_keeps_old_protection() -> None:
+    reader = FakeReader(
+        (_position("3"),),
+        [
+            _algo("cs-sl-old", "STOP_MARKET", "2", "1.40"),
+            _algo("cs-tp2-old", "TAKE_PROFIT_MARKET", "2", "2.00"),
+        ],
+    )
+    writer = FakeWriter(reader, unknown_submit_before_effect=True)
+    with pytest.raises(UnknownSubmissionOutcome):
+        replace_aggregate_protection(
+            reader,
+            writer,
+            symbol="XRPUSDT",
+            stop_trigger=Decimal("1.51"),
+            tp2_trigger=Decimal("2.10"),
+            management_seed="sig-unknown-submit-no-effect",
+        )
+    assert {order.client_algo_id for order in reader.orders} == {
+        "cs-sl-old",
+        "cs-tp2-old",
+    }
+
+
+def test_unknown_cancel_without_effect_fails_closed_with_new_protectors_still_active() -> None:
+    reader = FakeReader(
+        (_position("3"),),
+        [
+            _algo("cs-sl-old", "STOP_MARKET", "2", "1.40"),
+            _algo("cs-tp2-old", "TAKE_PROFIT_MARKET", "2", "2.00"),
+        ],
+    )
+    writer = FakeWriter(reader, unknown_cancel_before_effect=True)
+    with pytest.raises(UnknownSubmissionOutcome):
+        replace_aggregate_protection(
+            reader,
+            writer,
+            symbol="XRPUSDT",
+            stop_trigger=Decimal("1.51"),
+            tp2_trigger=Decimal("2.10"),
+            management_seed="sig-unknown-cancel",
+        )
+    # Install-new-before-cancel means the position retains server-side protection;
+    # duplicates force the account gate to quarantine further entries.
+    assert len(reader.orders) == 4
+
+
+def test_unknown_cancel_after_effect_is_reconciled() -> None:
+    reader = FakeReader(
+        (_position("3"),),
+        [
+            _algo("cs-sl-old", "STOP_MARKET", "2", "1.40"),
+            _algo("cs-tp2-old", "TAKE_PROFIT_MARKET", "2", "2.00"),
+        ],
+    )
+    writer = FakeWriter(reader, unknown_cancel_after_effect=True)
+    result = replace_aggregate_protection(
+        reader,
+        writer,
+        symbol="XRPUSDT",
+        stop_trigger=Decimal("1.51"),
+        tp2_trigger=Decimal("2.10"),
+        management_seed="sig-unknown-cancel-after",
+    )
+    assert result.status is ManagementStatus.PROTECTION_RECONCILED
+    assert len(reader.orders) == 2
