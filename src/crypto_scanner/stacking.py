@@ -168,9 +168,11 @@ def evaluate_stack_admission(
             if favorable is None or favorable < min_buffer:
                 reasons.append("INSUFFICIENT_PROFIT_BUFFER")
 
-    if position.symbol in _HIGH_CORRELATION_BUCKET:
-        if correlated_risk_slots_in_use >= safety.max_high_correlation_risk_slots:
-            reasons.append("HIGH_CORRELATION_RISK_BUCKET_FULL")
+    if (
+        position.symbol in _HIGH_CORRELATION_BUCKET
+        and correlated_risk_slots_in_use >= safety.max_high_correlation_risk_slots
+    ):
+        reasons.append("HIGH_CORRELATION_RISK_BUCKET_FULL")
 
     max_portfolio_risk = equity * Decimal(str(safety.max_portfolio_risk_fraction))
     if portfolio_planned_risk < 0 or portfolio_planned_risk >= max_portfolio_risk:
