@@ -274,7 +274,7 @@ def replace_aggregate_protection(
         raise PositionManagerError("replacement triggers must be positive")
 
     exit_side = "SELL" if position.side == "Buy" else "BUY"
-    existing = _assert_replaceable_existing(reader, symbol, exit_side)
+    _assert_replaceable_existing(reader, symbol, exit_side)
     stop_id = deterministic_management_id(symbol, management_seed, "slr")
     tp2_id = deterministic_management_id(symbol, management_seed, "tp2r")
     desired_stop = ConditionalExitPlan(
@@ -360,7 +360,9 @@ def reconcile_remaining_protection(
 ) -> ManagementResult:
     """Resize protection after a partial exit using the same reconciled replacement protocol."""
     positions = tuple(
-        position for position in reader.get_positions() if position.symbol == symbol and position.is_open
+        position
+        for position in reader.get_positions()
+        if position.symbol == symbol and position.is_open
     )
     if not positions:
         return cleanup_scanner_orphans(reader, writer, symbol)
