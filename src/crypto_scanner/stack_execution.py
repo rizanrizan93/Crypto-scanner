@@ -612,7 +612,7 @@ class ProfitableStackCoordinator:
                 reason_code="POST_FILL_GEOMETRY_UNSAFE",
                 error=exc,
             )
-            raise AssertionError("rollback helper must raise")
+            raise AssertionError("rollback helper must raise") from exc
 
         max_portfolio_risk = wallet.total_equity * Decimal(
             str(self.safety.max_portfolio_risk_fraction)
