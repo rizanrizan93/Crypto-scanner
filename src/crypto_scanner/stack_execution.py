@@ -14,7 +14,6 @@ from crypto_scanner.binance.private_write import (
     UnknownSubmissionOutcome,
     deterministic_management_id,
 )
-from crypto_scanner.discovery import TradeDirection
 from crypto_scanner.durable_execution import (
     DurableExecutionError,
     DurableExecutionResult,
@@ -41,7 +40,6 @@ from crypto_scanner.stack_store import (
 )
 from crypto_scanner.stacking import (
     DurableLayer,
-    StackClassification,
     StackTransactionState,
     build_aggregate_protection_geometry,
     direction_for_position,
@@ -74,14 +72,20 @@ def _transaction_detail(
     *,
     pre_position_size: Decimal,
     pending_layer: DurableLayer,
+    tick_size: Decimal,
     aggregate_stop: Decimal | None = None,
     aggregate_tp2: Decimal | None = None,
 ) -> str:
+    if tick_size <= 0:
+        raise ValueError("durable stack transaction tick_size must be positive")
     return json.dumps(
         {
             "pre_position_size": str(pre_position_size),
             "pending_layer": _layer_payload(pending_layer),
-            "aggregate_stop": str(aggregate_stop) if aggregate_stop is not None else None,
+            "tick_size": str(tick_size),
+            "aggregate_stop": (
+                str(aggregate_stop) if aggregate_stop is not None else None
+            ),
             "aggregate_tp2": str(aggregate_tp2) if aggregate_tp2 is not None else None,
         },
         sort_keys=True,
@@ -152,7 +156,12 @@ class ProfitableStackCoordinator:
         self.stack_store.save(updated, updated_at_ms=now)
         return updated
 
-    def _reconcile_entry(self, plan: EntryOrderPlan, *, attempts: int = 12) -> OrderSnapshot:
+    def _reconcile_entry(
+        self,
+        plan: EntryOrderPlan,
+        *,
+        attempts: int = 12,
+    ) -> OrderSnapshot:
         last: OrderSnapshot | None = None
         for _ in range(attempts):
             last = self.private.get_order_by_client_id(plan.symbol, plan.order_link_id)
@@ -163,8 +172,9 @@ class ProfitableStackCoordinator:
             self.sleep(0.5)
         if last is not None and (last.cum_exec_qty or Decimal(0)) > 0:
             return last
+        status = last.order_status if last else "UNKNOWN"
         raise StackExecutionError(
-            f"stack entry produced no confirmed fill; status={last.order_status if last else 'UNKNOWN'}"
+            f"stack entry produced no confirmed fill; status={status}"
         )
 
     def _entry_fills(self, order: OrderSnapshot) -> tuple[UserTradeFill, ...]:
@@ -202,26 +212,94 @@ class ProfitableStackCoordinator:
         pre_position_size: Decimal,
     ) -> None:
         exit_side = "SELL" if plan.side == "Buy" else "BUY"
-        client_id = deterministic_management_id(plan.symbol, plan.signal_id, "rollback")
-        try:
-            self.writer.submit_reduce_only_market_exit(
-                symbol=plan.symbol,
-                exit_side=exit_side,
-                qty=filled_qty,
-                client_order_id=client_id,
-            )
-        except UnknownSubmissionOutcome:
-            raise
+        client_id = deterministic_management_id(
+            plan.symbol,
+            plan.signal_id,
+            "rollback",
+        )
+        self.writer.submit_reduce_only_market_exit(
+            symbol=plan.symbol,
+            exit_side=exit_side,
+            qty=filled_qty,
+            client_order_id=client_id,
+        )
         rollback = self.private.get_order_by_client_id(plan.symbol, client_id)
         if rollback.order_status != "FILLED":
             raise StackExecutionError(
-                f"stack rollback did not fill deterministically: {rollback.order_status}"
+                "stack rollback did not fill deterministically: "
+                f"{rollback.order_status}"
             )
         position = self._single_position(plan.symbol)
         if position.size != pre_position_size:
             raise StackExecutionError(
                 "stack rollback did not restore pre-stack aggregate quantity"
             )
+
+    def _rollback_post_fill_violation(
+        self,
+        *,
+        state: DurableStackState,
+        plan: EntryOrderPlan,
+        order: OrderSnapshot,
+        pending: DurableLayer,
+        tick_size: Decimal,
+        pre_position_size: Decimal,
+        filled_qty: Decimal,
+        layer_entry: Decimal,
+        started_at_ms: int,
+        old_stop_id: str,
+        old_tp2_id: str,
+        reason_code: str,
+        error: Exception | None = None,
+    ) -> None:
+        detail = _transaction_detail(
+            pre_position_size=pre_position_size,
+            pending_layer=pending,
+            tick_size=tick_size,
+        )
+        try:
+            self._rollback_layer(
+                plan=plan,
+                filled_qty=filled_qty,
+                pre_position_size=pre_position_size,
+            )
+        except Exception as rollback_exc:
+            self._save_transaction(
+                state,
+                signal_id=plan.signal_id,
+                tx_state=StackTransactionState.QUARANTINED,
+                started_at_ms=started_at_ms,
+                detail=detail,
+                old_stop_id=old_stop_id,
+                old_tp2_id=old_tp2_id,
+                quarantine_reason=(
+                    f"{reason_code}_AND_ROLLBACK_UNCERTAIN:"
+                    f"{type(rollback_exc).__name__}"
+                ),
+            )
+            raise StackExecutionError(
+                f"{reason_code.lower()} after fill; rollback uncertain"
+            ) from rollback_exc
+
+        self.linkage.save_entry_plan(
+            plan,
+            status=f"STACK_ROLLED_BACK_{reason_code}",
+            venue_order_id=order.order_id,
+            avg_price=layer_entry,
+            updated_at_ms=self.now_ms(),
+        )
+        self.stack_store.save(
+            replace(
+                state,
+                transaction=None,
+                quarantined=False,
+                quarantine_reason=None,
+            ),
+            updated_at_ms=self.now_ms(),
+        )
+        raise StackExecutionError(
+            f"{reason_code.lower()} after fill; layer rolled back"
+        ) from error
 
     def execute(
         self,
@@ -235,8 +313,13 @@ class ProfitableStackCoordinator:
         self.arm.require_enabled()
         if not self.safety.profitable_stacking_enabled:
             raise StackExecutionError("profitable stacking is disabled")
-        if readiness.status is not ReadinessStatus.EXECUTION_READY or readiness.geometry is None:
-            raise StackExecutionError("stacking requires fresh EXECUTION_READY geometry")
+        if (
+            readiness.status is not ReadinessStatus.EXECUTION_READY
+            or readiness.geometry is None
+        ):
+            raise StackExecutionError(
+                "stacking requires fresh EXECUTION_READY geometry"
+            )
         if readiness.geometry.symbol != instrument.symbol:
             raise StackExecutionError("stack instrument does not match signal geometry")
         if self.private.get_position_mode_is_hedged():
@@ -247,12 +330,20 @@ class ProfitableStackCoordinator:
         if wallet.total_equity is None or wallet.total_equity <= 0:
             raise StackExecutionError("authoritative equity is missing or invalid")
         positions = self.private.get_positions()
-        current = tuple(p for p in positions if p.is_open and p.symbol == symbol)
+        current = tuple(
+            item
+            for item in positions
+            if item.is_open and item.symbol == symbol
+        )
         if len(current) != 1:
-            raise StackExecutionError("stacking requires an existing same-symbol position")
+            raise StackExecutionError(
+                "stacking requires an existing same-symbol position"
+            )
         position = current[0]
         if position.avg_price is None or position.mark_price is None:
-            raise StackExecutionError("existing position is missing average/mark price")
+            raise StackExecutionError(
+                "existing position is missing average/mark price"
+            )
 
         all_algos = self.private.get_open_algo_orders()
         protection = audit_symbol_protection(symbol, positions, all_algos)
@@ -274,12 +365,16 @@ class ProfitableStackCoordinator:
             raise StackExecutionError("existing position lacks durable layer ledger")
         signal_record = self.stack_store.signal_runtime_record(signal_id)
         if not signal_record.is_fresh_unused(self.now_ms()):
-            raise StackExecutionError("stack signal is stale, reused, or not EXECUTION_READY")
+            raise StackExecutionError(
+                "stack signal is stale, reused, or not EXECUTION_READY"
+            )
 
-        total_slots, correlated_slots, portfolio_risk = self.stack_store.risk_accounting(
-            positions,
-            equity=wallet.total_equity,
-            safety=self.safety,
+        total_slots, correlated_slots, portfolio_risk = (
+            self.stack_store.risk_accounting(
+                positions,
+                equity=wallet.total_equity,
+                safety=self.safety,
+            )
         )
         admission = evaluate_stack_admission(
             position=position,
@@ -318,8 +413,6 @@ class ProfitableStackCoordinator:
         except ExecutionPlanError as exc:
             raise StackExecutionError(str(exc)) from exc
 
-        # Preflight the expected post-fill geometry before any write. This avoids
-        # knowingly adding a layer that could not keep the aggregate winner protected.
         expected_qty = position.size + plan.qty
         expected_avg = (
             position.avg_price * position.size + plan.entry_price * plan.qty
@@ -342,15 +435,23 @@ class ProfitableStackCoordinator:
         available = wallet.total_available_balance
         if available is None or available <= 0:
             raise StackExecutionError("authoritative available balance is invalid")
-        layer_leverage = _required_leverage(plan, self.safety, available_balance=available)
+        layer_leverage = _required_leverage(
+            plan,
+            self.safety,
+            available_balance=available,
+        )
         current_leverage = position.leverage
         if current_leverage is None or current_leverage <= 0:
             raise StackExecutionError("existing position leverage is invalid")
         if current_leverage != current_leverage.to_integral_value():
-            raise StackExecutionError("existing Binance leverage must be an integer")
+            raise StackExecutionError(
+                "existing Binance leverage must be an integer"
+            )
         leverage = max(layer_leverage, int(current_leverage))
         if leverage > self.safety.max_leverage:
-            raise StackExecutionError("aggregate symbol leverage would breach safety cap")
+            raise StackExecutionError(
+                "aggregate symbol leverage would breach safety cap"
+            )
 
         started_at = self.now_ms()
         pending = DurableLayer(
@@ -369,6 +470,7 @@ class ProfitableStackCoordinator:
         detail = _transaction_detail(
             pre_position_size=position.size,
             pending_layer=pending,
+            tick_size=instrument.tick_size,
         )
         state = self._save_transaction(
             state,
@@ -413,7 +515,12 @@ class ProfitableStackCoordinator:
                 updated_at_ms=self.now_ms(),
             )
             self.stack_store.save(
-                replace(state, transaction=None, quarantined=False, quarantine_reason=None),
+                replace(
+                    state,
+                    transaction=None,
+                    quarantined=False,
+                    quarantine_reason=None,
+                ),
                 updated_at_ms=self.now_ms(),
             )
             raise
@@ -442,7 +549,9 @@ class ProfitableStackCoordinator:
         fills = self._entry_fills(order)
         fill_qty = sum((fill.qty for fill in fills), Decimal(0))
         if fill_qty != filled_qty:
-            raise StackExecutionError("stack user-trade fills do not match order fill quantity")
+            raise StackExecutionError(
+                "stack user-trade fills do not match order fill quantity"
+            )
         for fill in fills:
             self.linkage.save_fill(fill, client_order_id=plan.order_link_id)
         layer_entry = order.avg_price or _average_fill_price(fills)
@@ -450,11 +559,20 @@ class ProfitableStackCoordinator:
 
         aggregate_position = self._single_position(symbol)
         if aggregate_position.side != position.side:
-            raise StackExecutionError("stack fill changed net direction unexpectedly")
+            raise StackExecutionError(
+                "stack fill changed net direction unexpectedly"
+            )
         if aggregate_position.size != position.size + filled_qty:
-            raise StackExecutionError("aggregate quantity changed outside stack transaction")
-        if aggregate_position.avg_price is None or aggregate_position.mark_price is None:
-            raise StackExecutionError("post-stack aggregate position lacks average/mark price")
+            raise StackExecutionError(
+                "aggregate quantity changed outside stack transaction"
+            )
+        if (
+            aggregate_position.avg_price is None
+            or aggregate_position.mark_price is None
+        ):
+            raise StackExecutionError(
+                "post-stack aggregate position lacks average/mark price"
+            )
 
         pending = replace(
             pending,
@@ -479,50 +597,47 @@ class ProfitableStackCoordinator:
                 new_layer_entry_price=layer_entry,
             )
         except ValueError as exc:
-            try:
-                self._rollback_layer(
-                    plan=plan,
-                    filled_qty=filled_qty,
-                    pre_position_size=position.size,
-                )
-            except Exception as rollback_exc:
-                detail = _transaction_detail(
-                    pre_position_size=position.size,
-                    pending_layer=pending,
-                )
-                self._save_transaction(
-                    state,
-                    signal_id=signal_id,
-                    tx_state=StackTransactionState.QUARANTINED,
-                    started_at_ms=started_at,
-                    detail=detail,
-                    old_stop_id=protection.stop.client_algo_id,
-                    old_tp2_id=protection.take_profit.client_algo_id,
-                    quarantine_reason=f"POST_FILL_GEOMETRY_AND_ROLLBACK_UNCERTAIN:{rollback_exc}",
-                )
-                raise StackExecutionError("post-fill stack geometry unsafe; rollback uncertain") from rollback_exc
-            self.linkage.save_entry_plan(
-                plan,
-                status="STACK_ROLLED_BACK_GEOMETRY",
-                venue_order_id=order.order_id,
-                avg_price=layer_entry,
-                updated_at_ms=self.now_ms(),
+            self._rollback_post_fill_violation(
+                state=state,
+                plan=plan,
+                order=order,
+                pending=pending,
+                tick_size=instrument.tick_size,
+                pre_position_size=position.size,
+                filled_qty=filled_qty,
+                layer_entry=layer_entry,
+                started_at_ms=started_at,
+                old_stop_id=protection.stop.client_algo_id,
+                old_tp2_id=protection.take_profit.client_algo_id,
+                reason_code="POST_FILL_GEOMETRY_UNSAFE",
+                error=exc,
             )
-            self.stack_store.save(
-                replace(state, transaction=None, quarantined=False, quarantine_reason=None),
-                updated_at_ms=self.now_ms(),
-            )
-            raise StackExecutionError("post-fill stack geometry unsafe; layer rolled back") from exc
+            raise AssertionError("rollback helper must raise")
 
         max_portfolio_risk = wallet.total_equity * Decimal(
             str(self.safety.max_portfolio_risk_fraction)
         )
         if aggregate_geometry.aggregate_risk_amount > max_portfolio_risk:
-            raise StackExecutionError("aggregate protected risk exceeds portfolio hard cap")
+            self._rollback_post_fill_violation(
+                state=state,
+                plan=plan,
+                order=order,
+                pending=pending,
+                tick_size=instrument.tick_size,
+                pre_position_size=position.size,
+                filled_qty=filled_qty,
+                layer_entry=layer_entry,
+                started_at_ms=started_at,
+                old_stop_id=protection.stop.client_algo_id,
+                old_tp2_id=protection.take_profit.client_algo_id,
+                reason_code="POST_FILL_PORTFOLIO_RISK_BREACH",
+            )
+            raise AssertionError("rollback helper must raise")
 
         detail = _transaction_detail(
             pre_position_size=position.size,
             pending_layer=pending,
+            tick_size=instrument.tick_size,
             aggregate_stop=aggregate_geometry.stop_loss,
             aggregate_tp2=aggregate_geometry.take_profit_2,
         )
@@ -568,7 +683,11 @@ class ProfitableStackCoordinator:
                 management_seed=signal_id,
                 on_stage=stage_callback,
             )
-        except (UnknownSubmissionOutcome, BinanceOrderSubmissionError, PositionManagerError) as exc:
+        except (
+            UnknownSubmissionOutcome,
+            BinanceOrderSubmissionError,
+            PositionManagerError,
+        ) as exc:
             self._save_transaction(
                 state,
                 signal_id=signal_id,
@@ -579,7 +698,10 @@ class ProfitableStackCoordinator:
                 old_tp2_id=protection.take_profit.client_algo_id,
                 new_stop_id=new_stop_id,
                 new_tp2_id=new_tp2_id,
-                quarantine_reason=f"STACK_PROTECTION_REPLACEMENT_UNCERTAIN:{type(exc).__name__}",
+                quarantine_reason=(
+                    "STACK_PROTECTION_REPLACEMENT_UNCERTAIN:"
+                    f"{type(exc).__name__}"
+                ),
             )
             self.linkage.save_entry_plan(
                 plan,
@@ -590,8 +712,16 @@ class ProfitableStackCoordinator:
             )
             raise
 
-        final_stop_id = deterministic_management_id(symbol, signal_id, "slr")
-        final_tp2_id = deterministic_management_id(symbol, signal_id, "tp2r")
+        final_stop_id = deterministic_management_id(
+            symbol,
+            signal_id,
+            "slr",
+        )
+        final_tp2_id = deterministic_management_id(
+            symbol,
+            signal_id,
+            "tp2r",
+        )
         final_state = DurableStackState(
             symbol=symbol,
             position_id=state.position_id,
