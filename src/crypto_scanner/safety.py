@@ -45,8 +45,14 @@ class SafetyContract:
     environment: ExecutionEnvironment = ExecutionEnvironment.TESTNET
     live_trading_locked: bool = True
     max_risk_per_trade: float = 0.01
+    # This is the portfolio-wide logical risk-slot cap. Every new stack layer consumes
+    # one slot even though Binance One-way Mode nets same-symbol layers into one position.
     max_concurrent_positions: int = 10
-    one_position_per_symbol: bool = True
+    max_layers_per_symbol: int = 3
+    profitable_stacking_enabled: bool = True
+    # Retained for constructor/backward compatibility. The production contract now
+    # permits same-symbol exposure only through the bounded profitable-stacking gates.
+    one_position_per_symbol: bool = False
     max_leverage: float = 3.0
 
     def validate(self) -> None:
@@ -61,9 +67,18 @@ class SafetyContract:
         if not 0 < self.max_risk_per_trade <= 0.01:
             raise SafetyError("max_risk_per_trade must be > 0 and <= 1%")
         if not 1 <= self.max_concurrent_positions <= 10:
-            raise SafetyError("max_concurrent_positions must be between 1 and 10")
-        if self.one_position_per_symbol is not True:
-            raise SafetyError("one-position-per-symbol is mandatory")
+            raise SafetyError("max_concurrent_positions must be between 1 and 10 risk slots")
+        if not 1 <= self.max_layers_per_symbol <= 3:
+            raise SafetyError("max_layers_per_symbol must be between 1 and 3")
+        if self.profitable_stacking_enabled:
+            if self.one_position_per_symbol:
+                raise SafetyError(
+                    "one_position_per_symbol cannot be true while profitable stacking is enabled"
+                )
+        elif not self.one_position_per_symbol:
+            raise SafetyError(
+                "same-symbol exposure requires profitable_stacking_enabled=true"
+            )
         if not 1 <= self.max_leverage <= 3:
             raise SafetyError("max_leverage must be bounded between 1x and 3x during testing")
 
