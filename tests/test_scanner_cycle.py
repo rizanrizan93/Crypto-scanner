@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from decimal import Decimal
 
 from crypto_scanner.binance.models import PositionSnapshot, WalletSnapshot
@@ -9,6 +10,7 @@ from crypto_scanner.safety import SafetyContract
 from crypto_scanner.scanner_cycle import (
     candidate_account_skip_reason,
     evaluate_account_execution_gate,
+    run_scanner_cycle,
 )
 
 
@@ -135,4 +137,22 @@ def test_candidate_filter_blocks_when_ten_logical_slots_already_reached() -> Non
             correlated_risk_slots_in_use=0,
         )
         == "MAX_RISK_SLOTS_REACHED"
+    )
+
+
+def test_fast_watch_fetches_quote_and_microstructure_after_slow_inputs() -> None:
+    source = inspect.getsource(run_scanner_cycle)
+    marker = "# Fetch slower/static inputs first."
+    start = source.index(marker)
+    end = source.index("decision = evaluate_execution_readiness(", start)
+    block = source[start:end]
+
+    assert block.index('get_klines(candidate.symbol, "5"') < block.index(
+        "get_ticker(candidate.symbol)"
+    )
+    assert block.index("get_ticker(candidate.symbol)") < block.index(
+        "micro.get_evidence(candidate.symbol)"
+    )
+    assert block.index("micro.get_evidence(candidate.symbol)") < block.index(
+        "now_ms = _now_ms()"
     )
