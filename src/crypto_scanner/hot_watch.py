@@ -75,7 +75,10 @@ def _demo_acquisition_enabled() -> bool:
 
 
 def _demo_acquisition_direction(result: DiscoveryResult) -> TradeDirection:
-    if result.long_score <= _DEMO_ACQUISITION_SCORE_FLOOR and result.short_score <= _DEMO_ACQUISITION_SCORE_FLOOR:
+    if (
+        result.long_score <= _DEMO_ACQUISITION_SCORE_FLOOR
+        and result.short_score <= _DEMO_ACQUISITION_SCORE_FLOOR
+    ):
         return TradeDirection.NEUTRAL
     separation = abs(result.long_score - result.short_score)
     if separation < _DEMO_ACQUISITION_MIN_SEPARATION:
