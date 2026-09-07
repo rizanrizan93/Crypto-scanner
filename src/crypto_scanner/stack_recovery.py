@@ -22,7 +22,6 @@ from crypto_scanner.stack_store import DurableStackState, DurableStackStore
 from crypto_scanner.stacking import (
     DurableLayer,
     StackClassification,
-    StackTransactionState,
     build_aggregate_protection_geometry,
 )
 
@@ -34,6 +33,10 @@ class StackRecoveryResult:
     blockers: tuple[str, ...]
 
 
+class StackRecoveryMissingTickSize(ValueError):
+    """Raised when durable recovery evidence lacks the exact instrument tick size."""
+
+
 def _decimal(value: object, field: str) -> Decimal:
     try:
         return Decimal(str(value))
@@ -41,12 +44,20 @@ def _decimal(value: object, field: str) -> Decimal:
         raise ValueError(f"invalid recovery decimal: {field}") from exc
 
 
-def _parse_detail(detail: str | None) -> tuple[Decimal, DurableLayer, Decimal | None, Decimal | None]:
+def _parse_detail(
+    detail: str | None,
+) -> tuple[Decimal, DurableLayer, Decimal, Decimal | None, Decimal | None]:
     if not detail:
         raise ValueError("stack transaction detail is missing")
     raw = json.loads(detail)
     if not isinstance(raw, dict) or not isinstance(raw.get("pending_layer"), dict):
         raise ValueError("stack transaction detail is malformed")
+    if raw.get("tick_size") is None:
+        raise StackRecoveryMissingTickSize("durable tick_size is missing")
+    tick_size = _decimal(raw["tick_size"], "tick_size")
+    if tick_size <= 0:
+        raise StackRecoveryMissingTickSize("durable tick_size is invalid")
+
     layer_raw = raw["pending_layer"]
     layer = DurableLayer(
         signal_id=str(layer_raw["signal_id"]),
@@ -60,12 +71,15 @@ def _parse_detail(detail: str | None) -> tuple[Decimal, DurableLayer, Decimal | 
         risk_amount=_decimal(layer_raw["risk_amount"], "pending.risk_amount"),
         opened_at_ms=int(layer_raw["opened_at_ms"]),
         client_order_id=(
-            str(layer_raw["client_order_id"]) if layer_raw.get("client_order_id") else None
+            str(layer_raw["client_order_id"])
+            if layer_raw.get("client_order_id")
+            else None
         ),
     )
     return (
         _decimal(raw["pre_position_size"], "pre_position_size"),
         layer,
+        tick_size,
         _decimal(raw["aggregate_stop"], "aggregate_stop")
         if raw.get("aggregate_stop") is not None
         else None,
@@ -84,15 +98,27 @@ def _finish_state(
     tp2: Decimal,
     updated_at_ms: int,
 ) -> None:
-    layers = state.layers if layer.signal_id in state.ledger.signal_ids else state.layers + (layer,)
+    layers = (
+        state.layers
+        if layer.signal_id in state.ledger.signal_ids
+        else state.layers + (layer,)
+    )
     store.save(
         replace(
             state,
             layers=layers,
             aggregate_stop_loss=stop,
             aggregate_tp2=tp2,
-            stop_client_algo_id=deterministic_management_id(state.symbol, layer.signal_id, "slr"),
-            tp2_client_algo_id=deterministic_management_id(state.symbol, layer.signal_id, "tp2r"),
+            stop_client_algo_id=deterministic_management_id(
+                state.symbol,
+                layer.signal_id,
+                "slr",
+            ),
+            tp2_client_algo_id=deterministic_management_id(
+                state.symbol,
+                layer.signal_id,
+                "tp2r",
+            ),
             transaction=None,
             quarantined=False,
             quarantine_reason=None,
@@ -124,7 +150,9 @@ def recover_stack_transactions(
         if tx is None:
             continue
         try:
-            pre_size, pending, aggregate_stop, aggregate_tp2 = _parse_detail(tx.detail)
+            pre_size, pending, tick_size, aggregate_stop, aggregate_tp2 = _parse_detail(
+                tx.detail
+            )
             if pending.signal_id != tx.signal_id or pending.client_order_id is None:
                 raise ValueError("pending layer identity does not match transaction")
 
@@ -141,7 +169,7 @@ def recover_stack_transactions(
                 order = reader.get_order_by_client_id(symbol, pending.client_order_id)
             except BinancePrivateApiError:
                 # If protection replacement was already underway, the durable fill
-                # state is sufficient. Otherwise an unknown entry must remain quarantined.
+                # state is sufficient. Otherwise an unknown entry remains quarantined.
                 if aggregate_stop is None or aggregate_tp2 is None:
                     blockers.append(f"STACK_ENTRY_RECONCILIATION_UNCERTAIN:{symbol}")
                     continue
@@ -166,7 +194,8 @@ def recover_stack_transactions(
                 blockers.append(f"STACK_TRANSACTION_POSITION_FLAT:{symbol}")
                 continue
             position = positions[0]
-            if position.side != ("Buy" if pending.direction is TradeDirection.LONG else "Sell"):
+            expected_side = "Buy" if pending.direction is TradeDirection.LONG else "Sell"
+            if position.side != expected_side:
                 raise ValueError("recovered stack direction mismatches exchange position")
 
             if order is not None:
@@ -177,7 +206,10 @@ def recover_stack_transactions(
                     fill
                     for fill in reader.get_user_trades(
                         symbol,
-                        start_time_ms=max(0, (order.created_time_ms or tx.started_at_ms) - 60_000),
+                        start_time_ms=max(
+                            0,
+                            (order.created_time_ms or tx.started_at_ms) - 60_000,
+                        ),
                         limit=1000,
                     )
                     if fill.order_id == order.order_id
@@ -201,16 +233,24 @@ def recover_stack_transactions(
                 if position.avg_price is None or position.mark_price is None:
                     raise ValueError("recovery position lacks average/mark price")
                 active = tuple(
-                    order
-                    for order in reader.get_open_algo_orders(symbol)
-                    if order.status.upper() in {"NEW", "PENDING", "WORKING"}
+                    algo
+                    for algo in reader.get_open_algo_orders(symbol)
+                    if algo.status.upper() in {"NEW", "PENDING", "WORKING"}
                 )
                 old_stop = next(
-                    (order for order in active if order.client_algo_id == tx.old_stop_client_algo_id),
+                    (
+                        algo
+                        for algo in active
+                        if algo.client_algo_id == tx.old_stop_client_algo_id
+                    ),
                     None,
                 )
                 old_tp2 = next(
-                    (order for order in active if order.client_algo_id == tx.old_tp2_client_algo_id),
+                    (
+                        algo
+                        for algo in active
+                        if algo.client_algo_id == tx.old_tp2_client_algo_id
+                    ),
                     None,
                 )
                 if (
@@ -229,7 +269,7 @@ def recover_stack_transactions(
                     old_tp2=old_tp2.trigger_price,
                     new_signal_stop=pending.stop_loss,
                     new_signal_tp2=pending.tp2,
-                    tick_size=max(abs(pending.entry_price - pending.stop_loss) / Decimal("1000"), Decimal("0.00000001")),
+                    tick_size=tick_size,
                     layers=state.layers,
                     new_layer_qty=pending.qty,
                     new_layer_entry_price=pending.entry_price,
@@ -259,6 +299,8 @@ def recover_stack_transactions(
                 updated_at_ms=now_ms,
             )
             recovered.append(symbol)
+        except StackRecoveryMissingTickSize:
+            blockers.append(f"STACK_RECOVERY_MISSING_TICK_SIZE:{symbol}")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             blockers.append(f"STACK_RECOVERY_INVALID_STATE:{symbol}:{exc}")
 
