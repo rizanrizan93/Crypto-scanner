@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import httpx
@@ -10,6 +11,7 @@ from crypto_scanner.persistence import (
     SCHEMA_VERSION,
     PersistenceError,
     SupabasePersistenceConfig,
+    SupabaseRestClient,
     SupabaseTrajectoryStore,
     stable_position_id,
 )
@@ -79,6 +81,46 @@ def test_config_rejects_non_supabase_host() -> None:
 
 def test_stable_position_id_is_state_independent() -> None:
     assert stable_position_id(_record()) == stable_position_id(_record(TrajectoryState.CLOSED))
+
+
+def test_upsert_splits_rows_with_different_optional_columns() -> None:
+    payloads: list[list[dict[str, object]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode())
+        assert isinstance(payload, list)
+        payloads.append(payload)
+        return httpx.Response(201, json=[])
+
+    config = SupabasePersistenceConfig(
+        url="https://abc.supabase.co",
+        service_role_key="secret",
+    )
+    rows = (
+        {
+            "position_id": "pos-open",
+            "state": "OPEN",
+            "closed_at_ms": None,
+        },
+        {
+            "position_id": "pos-closed",
+            "state": "CLOSED",
+            "closed_at_ms": 123,
+        },
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        rest = SupabaseRestClient(config, client=http_client)
+        rest.upsert("positions", rows, on_conflict=("position_id",))
+
+    assert len(payloads) == 2
+    assert all(len(payload) == 1 for payload in payloads)
+    rows_by_id = {
+        str(row["position_id"]): row
+        for payload in payloads
+        for row in payload
+    }
+    assert "closed_at_ms" not in rows_by_id["pos-open"]
+    assert rows_by_id["pos-closed"]["closed_at_ms"] == 123
 
 
 def test_supabase_store_upserts_position_trajectory_and_closed_trade() -> None:
