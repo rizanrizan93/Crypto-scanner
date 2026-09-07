@@ -18,13 +18,15 @@ def _fill(
     realized: str,
     commission: str,
     time_ms: int,
+    *,
+    order_id: str | None = None,
 ) -> UserTradeFill:
     amount = Decimal(qty)
     px = Decimal(price)
     return UserTradeFill(
         symbol="XRPUSDT",
         trade_id=trade_id,
-        order_id=f"order-{trade_id}",
+        order_id=order_id or f"order-{trade_id}",
         side=side,
         position_side="BOTH",
         price=px,
@@ -67,6 +69,7 @@ def test_long_flat_to_flat_reconstructs_net_pnl() -> None:
     assert trade.funding_fee == Decimal("-0.001")
     assert trade.net_pnl == Decimal("0.1389")
     assert trade.holding_time_ms == 1000
+    assert not trade.layered_entry
 
 
 def test_partial_exit_is_reconstructed_until_flat() -> None:
@@ -79,6 +82,32 @@ def test_partial_exit_is_reconstructed_until_flat() -> None:
     assert trade.entry_qty == Decimal("4")
     assert trade.exit_qty == Decimal("4")
     assert trade.average_exit_price == Decimal("1.435")
+    assert not trade.layered_entry
+
+
+def test_multiple_entry_orders_are_layered_but_keep_aggregate_pnl() -> None:
+    fills = (
+        _fill("1", "BUY", "2", "1.40", "0", "0.001", 1000, order_id="entry-a"),
+        _fill("2", "BUY", "1", "1.50", "0", "0.001", 1500, order_id="entry-b"),
+        _fill("3", "SELL", "3", "1.60", "0.40", "0.002", 2500, order_id="exit"),
+    )
+    trade = reconstruct_closed_trades(fills)[0]
+    assert trade.layered_entry
+    assert trade.entry_order_ids == ("entry-a", "entry-b")
+    assert trade.entry_qty == Decimal("3")
+    assert trade.average_entry_price == Decimal("1.433333333333333333333333333")
+    assert trade.net_pnl == Decimal("0.396")
+
+
+def test_multiple_fills_from_one_entry_order_are_not_layered() -> None:
+    fills = (
+        _fill("1", "BUY", "1", "1.40", "0", "0", 1000, order_id="entry-a"),
+        _fill("2", "BUY", "2", "1.41", "0", "0", 1001, order_id="entry-a"),
+        _fill("3", "SELL", "3", "1.50", "0.28", "0", 2000, order_id="exit"),
+    )
+    trade = reconstruct_closed_trades(fills)[0]
+    assert trade.entry_order_ids == ("entry-a",)
+    assert not trade.layered_entry
 
 
 def test_reversal_without_flat_state_fails_closed() -> None:

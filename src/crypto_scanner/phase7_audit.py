@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import replace
 from decimal import Decimal
 
 from crypto_scanner.binance.auth import BinanceDemoCredentials
@@ -45,6 +46,11 @@ def _closed_limit() -> int:
     if not 1 <= value <= 50:
         raise ValueError("CRYPTO_SCANNER_PHASE7_CLOSED_LIMIT must be between 1 and 50")
     return value
+
+
+def _remove_layered_r_metrics(metrics):
+    """Keep durable aggregate trajectory/PnL evidence but never invent layered R attribution."""
+    return replace(metrics, mfe_r=None, mae_r=None)
 
 
 def main() -> None:
@@ -112,7 +118,14 @@ def main() -> None:
                         current_price=current_price,
                         initial_stop_loss=initial_stop,
                     )
-                    if eligible:
+                    if episode.layered_entry:
+                        metrics = _remove_layered_r_metrics(metrics)
+                        note = (
+                            "Open layered episode reconstructed as one Binance net position; "
+                            "MFE/MAE R attribution is disabled because exposure changed through "
+                            "multiple entry orders."
+                        )
+                    elif eligible:
                         note = (
                             "Open trajectory linked to durable scanner signal, regime and original "
                             "geometry; R metrics are calibration eligible."
@@ -194,7 +207,14 @@ def main() -> None:
                         current_price=trade.average_exit_price,
                         initial_stop_loss=initial_stop,
                     )
-                    if eligible:
+                    if trade.layered_entry:
+                        metrics = _remove_layered_r_metrics(metrics)
+                        note = (
+                            "Closed layered episode keeps aggregate realized/net PnL for bounded "
+                            "calibration, but MFE/MAE R is intentionally null because per-layer "
+                            "risk attribution is not yet reliable."
+                        )
+                    elif eligible:
                         note = (
                             "Closed trajectory linked to durable scanner signal, setup, regime and "
                             "initial geometry; R metrics are calibration eligible."
