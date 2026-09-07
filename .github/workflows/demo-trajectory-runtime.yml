@@ -1,6 +1,17 @@
 name: Crypto Scanner Demo Trajectory Runtime
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/crypto_scanner/persistence.py"
+      - "src/crypto_scanner/phase7_audit.py"
+      - "src/crypto_scanner/trajectory.py"
+      - "src/crypto_scanner/trajectory_store.py"
+      - "src/crypto_scanner/closed_trades.py"
+      - "src/crypto_scanner/trade_linkage.py"
+      - ".github/workflows/demo-trajectory-runtime.yml"
   schedule:
     - cron: "6,21,36,51 * * * *"
   workflow_dispatch:
