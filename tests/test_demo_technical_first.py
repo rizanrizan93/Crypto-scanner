@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -146,7 +145,11 @@ def _decision(
         monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
     else:
         monkeypatch.delenv("CRYPTO_SCANNER_TESTNET_EXECUTION", raising=False)
-    monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
+    monkeypatch.setattr(
+        module,
+        "build_signal_geometry",
+        lambda *_args, **_kwargs: _geometry(),
+    )
     return evaluate_execution_readiness(
         candidate,
         candles_3m=_candles(3, now_ms),
@@ -164,7 +167,9 @@ def _decision(
     )
 
 
-def test_demo_15m_technical_confirmation_softens_moderate_micro_misalignment(monkeypatch) -> None:
+def test_demo_15m_technical_confirmation_softens_moderate_micro_misalignment(
+    monkeypatch,
+) -> None:
     decision = _decision(
         monkeypatch,
         candidate=_candidate(confirmed_15m=True),
@@ -179,7 +184,9 @@ def test_demo_15m_technical_confirmation_softens_moderate_micro_misalignment(mon
     assert "DEMO_TECHNICAL_FIRST_15M_MICRO_SOFT_CONFIRMATION" in decision.reasons
 
 
-def test_demo_technical_first_keeps_strongly_adverse_microstructure_as_hard_block(monkeypatch) -> None:
+def test_demo_technical_first_keeps_strongly_adverse_microstructure_as_hard_block(
+    monkeypatch,
+) -> None:
     decision = _decision(
         monkeypatch,
         candidate=_candidate(confirmed_15m=True),
