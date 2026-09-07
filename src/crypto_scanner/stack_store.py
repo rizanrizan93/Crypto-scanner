@@ -83,7 +83,12 @@ class SignalRuntimeRecord:
 
 
 class _StackRestClient(SupabaseRestClient):
-    def select(self, table: str, *, params: dict[str, str]) -> list[dict[str, object]]:
+    def select(
+        self,
+        table: str,
+        *,
+        params: dict[str, str],
+    ) -> list[dict[str, object]]:
         if not table.replace("_", "").isalnum():
             raise PersistenceError("invalid persistence table name")
         response = self._client.get(
@@ -97,8 +102,12 @@ class _StackRestClient(SupabaseRestClient):
                 f"{response.text[:500]}"
             )
         payload = response.json()
-        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
-            raise PersistenceError(f"Supabase select returned invalid payload for {table}")
+        if not isinstance(payload, list) or any(
+            not isinstance(row, dict) for row in payload
+        ):
+            raise PersistenceError(
+                f"Supabase select returned invalid payload for {table}"
+            )
         return payload
 
 
@@ -138,7 +147,11 @@ def _parse_layer(raw: object) -> DurableLayer:
             tp2=_decimal(raw["tp2"], "tp2"),
             risk_amount=_decimal(raw["risk_amount"], "risk_amount"),
             opened_at_ms=int(raw["opened_at_ms"]),
-            client_order_id=str(raw["client_order_id"]) if raw.get("client_order_id") else None,
+            client_order_id=(
+                str(raw["client_order_id"])
+                if raw.get("client_order_id")
+                else None
+            ),
         )
     except (KeyError, ValueError, TypeError) as exc:
         raise PersistenceError("malformed durable stack layer") from exc
@@ -164,21 +177,44 @@ def _parse_transaction(raw: object) -> StackTransaction | None:
             state=StackTransactionState(str(raw["state"])),
             started_at_ms=int(raw["started_at_ms"]),
             updated_at_ms=int(raw["updated_at_ms"]),
-            old_stop_client_algo_id=str(raw["old_stop_client_algo_id"]) if raw.get("old_stop_client_algo_id") else None,
-            old_tp2_client_algo_id=str(raw["old_tp2_client_algo_id"]) if raw.get("old_tp2_client_algo_id") else None,
-            new_stop_client_algo_id=str(raw["new_stop_client_algo_id"]) if raw.get("new_stop_client_algo_id") else None,
-            new_tp2_client_algo_id=str(raw["new_tp2_client_algo_id"]) if raw.get("new_tp2_client_algo_id") else None,
+            old_stop_client_algo_id=(
+                str(raw["old_stop_client_algo_id"])
+                if raw.get("old_stop_client_algo_id")
+                else None
+            ),
+            old_tp2_client_algo_id=(
+                str(raw["old_tp2_client_algo_id"])
+                if raw.get("old_tp2_client_algo_id")
+                else None
+            ),
+            new_stop_client_algo_id=(
+                str(raw["new_stop_client_algo_id"])
+                if raw.get("new_stop_client_algo_id")
+                else None
+            ),
+            new_tp2_client_algo_id=(
+                str(raw["new_tp2_client_algo_id"])
+                if raw.get("new_tp2_client_algo_id")
+                else None
+            ),
             detail=str(raw["detail"]) if raw.get("detail") else None,
         )
     except (KeyError, ValueError, TypeError) as exc:
         raise PersistenceError("malformed durable stack transaction") from exc
-    if not tx.signal_id.startswith("sig-") or tx.started_at_ms < 0 or tx.updated_at_ms < tx.started_at_ms:
+    if (
+        not tx.signal_id.startswith("sig-")
+        or tx.started_at_ms < 0
+        or tx.updated_at_ms < tx.started_at_ms
+    ):
         raise PersistenceError("stack transaction violates invariants")
     return tx
 
 
 def _parse_state(symbol: str, raw: object) -> DurableStackState:
-    if not isinstance(raw, dict) or str(raw.get("symbol") or "").upper() != symbol.upper():
+    if (
+        not isinstance(raw, dict)
+        or str(raw.get("symbol") or "").upper() != symbol.upper()
+    ):
         raise PersistenceError("stack runtime state symbol mismatch")
     try:
         direction_raw = raw.get("direction")
@@ -189,20 +225,40 @@ def _parse_state(symbol: str, raw: object) -> DurableStackState:
     if not isinstance(layers_raw, list):
         raise PersistenceError("stack layers must be an array")
     layers = tuple(_parse_layer(item) for item in layers_raw)
-    if direction is not None and any(layer.direction is not direction for layer in layers):
+    if direction is not None and any(
+        layer.direction is not direction for layer in layers
+    ):
         raise PersistenceError("stack runtime state contains mixed directions")
     return DurableStackState(
         symbol=symbol.upper(),
         position_id=str(raw["position_id"]) if raw.get("position_id") else None,
         direction=direction,
         layers=layers,
-        aggregate_stop_loss=_optional_decimal(raw.get("aggregate_stop_loss"), "aggregate_stop_loss"),
-        aggregate_tp2=_optional_decimal(raw.get("aggregate_tp2"), "aggregate_tp2"),
-        stop_client_algo_id=str(raw["stop_client_algo_id"]) if raw.get("stop_client_algo_id") else None,
-        tp2_client_algo_id=str(raw["tp2_client_algo_id"]) if raw.get("tp2_client_algo_id") else None,
+        aggregate_stop_loss=_optional_decimal(
+            raw.get("aggregate_stop_loss"),
+            "aggregate_stop_loss",
+        ),
+        aggregate_tp2=_optional_decimal(
+            raw.get("aggregate_tp2"),
+            "aggregate_tp2",
+        ),
+        stop_client_algo_id=(
+            str(raw["stop_client_algo_id"])
+            if raw.get("stop_client_algo_id")
+            else None
+        ),
+        tp2_client_algo_id=(
+            str(raw["tp2_client_algo_id"])
+            if raw.get("tp2_client_algo_id")
+            else None
+        ),
         transaction=_parse_transaction(raw.get("transaction")),
         quarantined=bool(raw.get("quarantined", False)),
-        quarantine_reason=str(raw["quarantine_reason"]) if raw.get("quarantine_reason") else None,
+        quarantine_reason=(
+            str(raw["quarantine_reason"])
+            if raw.get("quarantine_reason")
+            else None
+        ),
     )
 
 
@@ -226,9 +282,14 @@ def _encode_state(state: DurableStackState) -> dict[str, object]:
 
 
 class DurableStackStore:
-    """Logical layer ledger persisted in the existing backend-only runtime_state table."""
+    """Logical layer ledger persisted in the backend-only runtime_state table."""
 
-    def __init__(self, config: SupabasePersistenceConfig, *, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        config: SupabasePersistenceConfig,
+        *,
+        client: httpx.Client | None = None,
+    ) -> None:
         self._rest = _StackRestClient(config, client=client)
 
     def close(self) -> None:
@@ -243,7 +304,11 @@ class DurableStackStore:
     def load(self, symbol: str) -> DurableStackState | None:
         rows = self._rest.select(
             "runtime_state",
-            params={"select": "state_key,version,state", "state_key": f"eq.{_state_key(symbol)}", "limit": "1"},
+            params={
+                "select": "state_key,version,state",
+                "state_key": f"eq.{_state_key(symbol)}",
+                "limit": "1",
+            },
         )
         if not rows:
             return None
@@ -252,15 +317,20 @@ class DurableStackStore:
         return _parse_state(symbol, rows[0].get("state"))
 
     def load_all(self) -> dict[str, DurableStackState]:
-        rows = self._rest.select("runtime_state", params={"select": "state_key,version,state"})
+        rows = self._rest.select(
+            "runtime_state",
+            params={"select": "state_key,version,state"},
+        )
         result: dict[str, DurableStackState] = {}
         for row in rows:
             key = str(row.get("state_key") or "")
             if not key.startswith(STACK_STATE_PREFIX):
                 continue
             if int(row.get("version") or 0) != STACK_STATE_VERSION:
-                raise PersistenceError(f"unsupported durable stack state version: {key}")
-            symbol = key[len(STACK_STATE_PREFIX):].upper()
+                raise PersistenceError(
+                    f"unsupported durable stack state version: {key}"
+                )
+            symbol = key[len(STACK_STATE_PREFIX) :].upper()
             result[symbol] = _parse_state(symbol, row.get("state"))
         return result
 
@@ -269,7 +339,14 @@ class DurableStackStore:
             raise PersistenceError("stack state timestamp cannot be negative")
         self._rest.upsert(
             "runtime_state",
-            ({"state_key": _state_key(state.symbol), "version": STACK_STATE_VERSION, "state": _encode_state(state), "updated_at_ms": updated_at_ms},),
+            (
+                {
+                    "state_key": _state_key(state.symbol),
+                    "version": STACK_STATE_VERSION,
+                    "state": _encode_state(state),
+                    "updated_at_ms": updated_at_ms,
+                },
+            ),
             on_conflict=("state_key",),
         )
 
@@ -278,13 +355,20 @@ class DurableStackStore:
             raise PersistenceError("scanner signal id required")
         signals = self._rest.select(
             "signals",
-            params={"select": "signal_id,status,expires_at_ms", "signal_id": f"eq.{signal_id}", "limit": "1"},
+            params={
+                "select": "signal_id,status,expires_at_ms",
+                "signal_id": f"eq.{signal_id}",
+                "limit": "1",
+            },
         )
         if len(signals) != 1:
             raise PersistenceError("durable signal record is missing or ambiguous")
         orders = self._rest.select(
             "orders",
-            params={"select": "client_order_id", "signal_id": f"eq.{signal_id}"},
+            params={
+                "select": "client_order_id",
+                "signal_id": f"eq.{signal_id}",
+            },
         )
         expires = signals[0].get("expires_at_ms")
         return SignalRuntimeRecord(
@@ -304,7 +388,9 @@ class DurableStackStore:
         safety = safety or SafetyContract()
         safety.validate()
         if equity <= 0:
-            raise PersistenceError("equity must be positive for stack risk accounting")
+            raise PersistenceError(
+                "equity must be positive for stack risk accounting"
+            )
         states = self.load_all()
         total_slots = 0
         correlated_slots = 0
@@ -320,7 +406,9 @@ class DurableStackStore:
             else:
                 expected = "LONG" if position.side == "Buy" else "SHORT"
                 if state.direction is not None and state.direction.value != expected:
-                    raise PersistenceError(f"stack ledger direction mismatch for {position.symbol}")
+                    raise PersistenceError(
+                        f"stack ledger direction mismatch for {position.symbol}"
+                    )
                 slots, risk = state.layer_count, state.ledger.planned_risk
             total_slots += slots
             planned_risk += risk
