@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -9,6 +10,17 @@ from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDire
 from crypto_scanner.signal_geometry import GeometryError, SignalGeometry, build_signal_geometry
 from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.technical import closed_candles
+
+_ORDERBOOK_ALIGNMENT_THRESHOLD = Decimal("0.05")
+_TAKER_PRESSURE_ALIGNMENT_THRESHOLD = Decimal("0.03")
+_DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
+_DEMO_TEMPORAL_CONFIRMATION_REASON = "DEMO_TEMPORAL_MICROSTRUCTURE_2_OF_3"
+_DEMO_TEMPORAL_WINDOW = 3
+_DEMO_TEMPORAL_REQUIRED_SUPPORT = 2
+_DEMO_MICRO_HISTORY: dict[
+    tuple[str, int, TradeDirection],
+    list[tuple[int, bool, bool]],
+] = {}
 
 
 class ReadinessStatus(StrEnum):
@@ -49,6 +61,82 @@ def _aligned_microstructure(
     if direction is TradeDirection.SHORT:
         return value <= -threshold
     return False
+
+
+def _demo_temporal_enabled(candidate: DiscoveryResult) -> bool:
+    execution_enabled = (
+        os.getenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "").strip().upper() == "ENABLED"
+    )
+    return execution_enabled and _DEMO_ACQUISITION_REASON in candidate.reasons
+
+
+def _micro_value_valid(value: Decimal | None) -> bool:
+    return value is not None and Decimal(-1) <= value <= Decimal(1)
+
+
+def _demo_temporal_microstructure_confirmed(
+    candidate: DiscoveryResult,
+    evidence: FastLaneEvidence,
+    *,
+    book_age: int,
+) -> bool:
+    """Confirm promoted Demo candidates from a bounded 3-snapshot micro window.
+
+    A valid snapshot is supportive when at least one of orderbook imbalance or
+    taker pressure is aligned with the candidate direction. Two of the latest
+    three valid snapshots must be supportive, both evidence types must have
+    aligned at least once in that window, and the current snapshot must retain
+    at least one aligned signal. Missing, invalid, or stale evidence never
+    contributes to confirmation.
+    """
+    if not _demo_temporal_enabled(candidate):
+        return False
+    if candidate.direction not in {TradeDirection.LONG, TradeDirection.SHORT}:
+        return False
+    if book_age < 0 or book_age > 2_000:
+        return False
+    if not _micro_value_valid(evidence.orderbook_imbalance) or not _micro_value_valid(
+        evidence.taker_pressure
+    ):
+        return False
+
+    assert evidence.orderbook_imbalance is not None
+    assert evidence.taker_pressure is not None
+    orderbook_aligned = _aligned_microstructure(
+        candidate.direction,
+        evidence.orderbook_imbalance,
+        _ORDERBOOK_ALIGNMENT_THRESHOLD,
+    )
+    taker_aligned = _aligned_microstructure(
+        candidate.direction,
+        evidence.taker_pressure,
+        _TAKER_PRESSURE_ALIGNMENT_THRESHOLD,
+    )
+    current_supportive = orderbook_aligned or taker_aligned
+
+    key = (candidate.symbol, evidence.candidate_timestamp_ms, candidate.direction)
+    history = _DEMO_MICRO_HISTORY.setdefault(key, [])
+    observation = (
+        evidence.orderbook_timestamp_ms,
+        orderbook_aligned,
+        taker_aligned,
+    )
+    if not history or history[-1][0] != evidence.orderbook_timestamp_ms:
+        history.append(observation)
+        if len(history) > _DEMO_TEMPORAL_WINDOW:
+            del history[:-_DEMO_TEMPORAL_WINDOW]
+
+    if len(history) < _DEMO_TEMPORAL_WINDOW:
+        return False
+    supportive_count = sum(orderbook or taker for _, orderbook, taker in history)
+    orderbook_seen = any(orderbook for _, orderbook, _ in history)
+    taker_seen = any(taker for _, _, taker in history)
+    return (
+        supportive_count >= _DEMO_TEMPORAL_REQUIRED_SUPPORT
+        and orderbook_seen
+        and taker_seen
+        and current_supportive
+    )
 
 
 def evaluate_execution_readiness(
@@ -95,31 +183,39 @@ def evaluate_execution_readiness(
     if spread_bps > Decimal("5"):
         reasons.append("SPREAD_TOO_WIDE")
 
+    temporal_micro_confirmed = _demo_temporal_microstructure_confirmed(
+        candidate,
+        evidence,
+        book_age=book_age,
+    )
+    orderbook_aligned = False
+    taker_aligned = False
+
     if evidence.orderbook_imbalance is None:
         reasons.append("ORDERBOOK_IMBALANCE_MISSING")
     elif not Decimal(-1) <= evidence.orderbook_imbalance <= Decimal(1):
         reasons.append("ORDERBOOK_IMBALANCE_INVALID")
-    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not (
-        _aligned_microstructure(
+    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT}:
+        orderbook_aligned = _aligned_microstructure(
             candidate.direction,
             evidence.orderbook_imbalance,
-            Decimal("0.05"),
+            _ORDERBOOK_ALIGNMENT_THRESHOLD,
         )
-    ):
-        reasons.append("ORDERBOOK_NOT_ALIGNED")
+        if not orderbook_aligned and not temporal_micro_confirmed:
+            reasons.append("ORDERBOOK_NOT_ALIGNED")
 
     if evidence.taker_pressure is None:
         reasons.append("TAKER_PRESSURE_MISSING")
     elif not Decimal(-1) <= evidence.taker_pressure <= Decimal(1):
         reasons.append("TAKER_PRESSURE_INVALID")
-    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT} and not (
-        _aligned_microstructure(
+    elif candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT}:
+        taker_aligned = _aligned_microstructure(
             candidate.direction,
             evidence.taker_pressure,
-            Decimal("0.03"),
+            _TAKER_PRESSURE_ALIGNMENT_THRESHOLD,
         )
-    ):
-        reasons.append("TAKER_PRESSURE_NOT_ALIGNED")
+        if not taker_aligned and not temporal_micro_confirmed:
+            reasons.append("TAKER_PRESSURE_NOT_ALIGNED")
 
     for interval_minutes, candles, label in (
         (3, candles_3m, "3M"),
@@ -169,9 +265,12 @@ def evaluate_execution_readiness(
             reasons=tuple(dict.fromkeys(reasons)),
         )
 
+    ready_reasons = ("ALL_HARD_GUARDS_PASSED",)
+    if temporal_micro_confirmed and not (orderbook_aligned and taker_aligned):
+        ready_reasons += (_DEMO_TEMPORAL_CONFIRMATION_REASON,)
     return ReadinessDecision(
         symbol=candidate.symbol,
         status=ReadinessStatus.EXECUTION_READY,
         geometry=geometry,
-        reasons=("ALL_HARD_GUARDS_PASSED",),
+        reasons=ready_reasons,
     )
