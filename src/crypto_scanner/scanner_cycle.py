@@ -439,13 +439,16 @@ def run_scanner_cycle() -> ScannerCycleResult:
                     continue
 
                 try:
-                    fresh = micro.get_evidence(candidate.symbol)
-                    ticker = public.get_ticker(candidate.symbol)
-                    quote_timestamp_ms = _now_ms()
+                    # Fetch slower/static inputs first. Quote and microstructure are
+                    # intentionally fetched last so their strict 2s freshness guards
+                    # measure venue age instead of time spent on our own REST calls.
                     instrument = public.get_instrument(candidate.symbol)
                     candles_1m = public.get_klines(candidate.symbol, "1", limit=120)
                     candles_3m = public.get_klines(candidate.symbol, "3", limit=200)
                     candles_5m = public.get_klines(candidate.symbol, "5", limit=200)
+                    ticker = public.get_ticker(candidate.symbol)
+                    quote_timestamp_ms = _now_ms()
+                    fresh = micro.get_evidence(candidate.symbol)
                     now_ms = _now_ms()
                     decision = evaluate_execution_readiness(
                         candidate,
