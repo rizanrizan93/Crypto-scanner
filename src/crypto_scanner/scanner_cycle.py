@@ -36,6 +36,17 @@ from crypto_scanner.fast_lane import (
     ReadinessDecision,
     evaluate_execution_readiness,
 )
+from crypto_scanner.hot_watch import (
+    CANDIDATE_TTL_MS,
+    FAST_WATCH_INTERVAL_SECONDS,
+    FAST_WATCH_MAX_ROUNDS,
+    HotWatchObservation,
+    HotWatchStatus,
+    HotWatchStore,
+    build_hot_watch_telemetry,
+    classify_hot_watch,
+    select_hot_candidates,
+)
 from crypto_scanner.lifecycle import (
     AuthoritativeLifecycleSnapshot,
     LifecycleState,
@@ -85,8 +96,11 @@ class ScannerCycleResult:
     account_gate: AccountExecutionGate
     discovery_result_count: int
     candidate_count: int
+    hot_candidate_count: int
+    fast_watch_rounds: int
     durable_signal_ids: tuple[str, ...]
     readiness: tuple[dict[str, object], ...]
+    hot_watch: tuple[dict[str, object], ...]
     microstructure_failures: tuple[dict[str, str], ...]
     execution_skips: tuple[dict[str, str], ...]
     stack_recovery: dict[str, object]
@@ -166,10 +180,14 @@ def _readiness_row(
     signal_id: str | None,
     orderbook_imbalance: object,
     taker_pressure: object,
+    watch_round: int,
+    hot_status: HotWatchStatus,
 ) -> dict[str, object]:
     return {
         "symbol": candidate.symbol,
         "status": decision.status.value,
+        "hot_status": hot_status.value,
+        "watch_round": watch_round,
         "signal_id": signal_id,
         "reasons": list(decision.reasons),
         "orderbook_imbalance": str(orderbook_imbalance),
@@ -277,6 +295,15 @@ def _stack_skip_reason(
     return None
 
 
+def _save_hot_observation(
+    store: HotWatchStore,
+    rows: list[dict[str, object]],
+    observation: HotWatchObservation,
+) -> None:
+    store.save(observation)
+    rows.append(observation.payload())
+
+
 def run_scanner_cycle() -> ScannerCycleResult:
     safety = SafetyContract()
     safety.validate()
@@ -290,6 +317,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
 
     micro_failures: list[dict[str, str]] = []
     readiness_rows: list[dict[str, object]] = []
+    hot_watch_rows: list[dict[str, object]] = []
     ready_signals: list[DurableReadySignal] = []
     execution_skips: list[dict[str, str]] = []
     execution_result: DurableExecutionResult | None = None
@@ -297,6 +325,8 @@ def run_scanner_cycle() -> ScannerCycleResult:
     execution_attempted = False
     orders_submitted = 0
     recovery_result = StackRecoveryResult((), (), ())
+    fast_watch_rounds = 0
+    hot_candidates: tuple[DiscoveryResult, ...] = ()
 
     with (
         BinanceDemoPublicRestClient(base_url=config.binance_rest_url) as public,
@@ -312,6 +342,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
         ) as writer,
         DurableTradeLinkage(persistence_config) as linkage,
         DurableStackStore(persistence_config) as stack_store,
+        HotWatchStore(persistence_config) as hot_store,
     ):
         if arm.enabled:
             recovery_result = recover_stack_transactions(
@@ -358,71 +389,184 @@ def run_scanner_cycle() -> ScannerCycleResult:
 
         run = DiscoveryPipeline(public, universe=config.universe).run(discovery_micro)
         run_id = linkage.save_discovery_run(run, execution_armed=arm.enabled)
+        hot_candidates = select_hot_candidates(run.results)
 
-        for candidate in run.results:
-            if candidate.status is not DiscoveryStatus.CANDIDATE:
-                continue
-            try:
-                fresh = micro.get_evidence(candidate.symbol)
-                ticker = public.get_ticker(candidate.symbol)
-                quote_timestamp_ms = _now_ms()
-                instrument = public.get_instrument(candidate.symbol)
-                candles_3m = public.get_klines(candidate.symbol, "3", limit=200)
-                candles_5m = public.get_klines(candidate.symbol, "5", limit=200)
-                now_ms = _now_ms()
-                decision = evaluate_execution_readiness(
-                    candidate,
-                    candles_3m=candles_3m,
-                    candles_5m=candles_5m,
-                    ticker=ticker,
-                    instrument=instrument,
-                    evidence=FastLaneEvidence(
-                        quote_timestamp_ms=quote_timestamp_ms,
+        for candidate in hot_candidates:
+            _save_hot_observation(
+                hot_store,
+                hot_watch_rows,
+                HotWatchObservation(
+                    run_id=run_id,
+                    symbol=candidate.symbol,
+                    direction=candidate.direction,
+                    discovery_score=str(candidate.ranking_score),
+                    round_index=0,
+                    observed_at_ms=_now_ms(),
+                    candidate_timestamp_ms=run.completed_at_ms,
+                    status=HotWatchStatus.HOT_CANDIDATE,
+                    reasons=("DISCOVERY_CANDIDATE_SELECTED",),
+                ),
+            )
+
+        active_hot = list(hot_candidates)
+        max_rounds = FAST_WATCH_MAX_ROUNDS if arm.enabled else 1
+        for watch_round in range(1, max_rounds + 1):
+            if not active_hot or ready_signals:
+                break
+            if watch_round > 1:
+                time.sleep(FAST_WATCH_INTERVAL_SECONDS)
+            fast_watch_rounds = watch_round
+            next_active: list[DiscoveryResult] = []
+
+            for candidate in active_hot:
+                before_fetch_ms = _now_ms()
+                if before_fetch_ms - run.completed_at_ms > CANDIDATE_TTL_MS:
+                    _save_hot_observation(
+                        hot_store,
+                        hot_watch_rows,
+                        HotWatchObservation(
+                            run_id=run_id,
+                            symbol=candidate.symbol,
+                            direction=candidate.direction,
+                            discovery_score=str(candidate.ranking_score),
+                            round_index=watch_round,
+                            observed_at_ms=before_fetch_ms,
+                            candidate_timestamp_ms=run.completed_at_ms,
+                            status=HotWatchStatus.EXPIRED,
+                            reasons=("STALE_CANDIDATE",),
+                        ),
+                    )
+                    continue
+
+                try:
+                    fresh = micro.get_evidence(candidate.symbol)
+                    ticker = public.get_ticker(candidate.symbol)
+                    quote_timestamp_ms = _now_ms()
+                    instrument = public.get_instrument(candidate.symbol)
+                    candles_1m = public.get_klines(candidate.symbol, "1", limit=120)
+                    candles_3m = public.get_klines(candidate.symbol, "3", limit=200)
+                    candles_5m = public.get_klines(candidate.symbol, "5", limit=200)
+                    now_ms = _now_ms()
+                    decision = evaluate_execution_readiness(
+                        candidate,
+                        candles_3m=candles_3m,
+                        candles_5m=candles_5m,
+                        ticker=ticker,
+                        instrument=instrument,
+                        evidence=FastLaneEvidence(
+                            quote_timestamp_ms=quote_timestamp_ms,
+                            candidate_timestamp_ms=run.completed_at_ms,
+                            orderbook_timestamp_ms=min(fresh.observed_at_ms, now_ms),
+                            orderbook_imbalance=fresh.orderbook_imbalance,
+                            taker_pressure=fresh.taker_pressure,
+                            exchange_healthy=True,
+                            orderbook_healthy=True,
+                        ),
+                        now_ms=now_ms,
+                        strategy=strategy,
+                    )
+                    hot_status = classify_hot_watch(
+                        decision,
                         candidate_timestamp_ms=run.completed_at_ms,
-                        orderbook_timestamp_ms=min(fresh.observed_at_ms, now_ms),
+                        now_ms=now_ms,
+                    )
+                    telemetry = build_hot_watch_telemetry(
+                        candidate,
+                        candles_1m=candles_1m,
+                        candles_3m=candles_3m,
+                        ticker=ticker,
                         orderbook_imbalance=fresh.orderbook_imbalance,
                         taker_pressure=fresh.taker_pressure,
-                        exchange_healthy=True,
-                        orderbook_healthy=True,
-                    ),
-                    now_ms=now_ms,
-                    strategy=strategy,
-                )
-                signal_id: str | None = None
-                if decision.execution_ready:
-                    signal_id = linkage.save_execution_ready_signal(
-                        run_id=run_id,
-                        candidate=candidate,
-                        readiness=decision,
-                        candidate_timestamp_ms=run.completed_at_ms,
-                        geometry_created_at_ms=now_ms,
+                        now_ms=now_ms,
                     )
-                    ready_signals.append(
-                        DurableReadySignal(
+                    signal_id: str | None = None
+                    if decision.execution_ready:
+                        signal_id = linkage.save_execution_ready_signal(
+                            run_id=run_id,
                             candidate=candidate,
                             readiness=decision,
+                            candidate_timestamp_ms=run.completed_at_ms,
+                            geometry_created_at_ms=now_ms,
+                        )
+                        ready_signals.append(
+                            DurableReadySignal(
+                                candidate=candidate,
+                                readiness=decision,
+                                signal_id=signal_id,
+                                instrument=instrument,
+                            )
+                        )
+                    elif hot_status is HotWatchStatus.WATCHING and watch_round < max_rounds:
+                        next_active.append(candidate)
+
+                    reasons = decision.reasons
+                    if hot_status is HotWatchStatus.WATCHING and watch_round == max_rounds:
+                        reasons = reasons + ("FAST_WATCH_WINDOW_EXHAUSTED",)
+                    _save_hot_observation(
+                        hot_store,
+                        hot_watch_rows,
+                        HotWatchObservation(
+                            run_id=run_id,
+                            symbol=candidate.symbol,
+                            direction=candidate.direction,
+                            discovery_score=str(candidate.ranking_score),
+                            round_index=watch_round,
+                            observed_at_ms=now_ms,
+                            candidate_timestamp_ms=run.completed_at_ms,
+                            status=hot_status,
+                            reasons=reasons,
                             signal_id=signal_id,
-                            instrument=instrument,
+                            telemetry=telemetry,
+                        ),
+                    )
+                    readiness_rows.append(
+                        _readiness_row(
+                            candidate,
+                            decision,
+                            signal_id=signal_id,
+                            orderbook_imbalance=fresh.orderbook_imbalance,
+                            taker_pressure=fresh.taker_pressure,
+                            watch_round=watch_round,
+                            hot_status=hot_status,
                         )
                     )
-                readiness_rows.append(
-                    _readiness_row(
-                        candidate,
-                        decision,
-                        signal_id=signal_id,
-                        orderbook_imbalance=fresh.orderbook_imbalance,
-                        taker_pressure=fresh.taker_pressure,
+                except (
+                    PersistenceError,
+                    BinanceMicrostructureError,
+                    ValueError,
+                    RuntimeError,
+                ) as exc:
+                    now_ms = _now_ms()
+                    detail = f"{type(exc).__name__}:{exc}"
+                    _save_hot_observation(
+                        hot_store,
+                        hot_watch_rows,
+                        HotWatchObservation(
+                            run_id=run_id,
+                            symbol=candidate.symbol,
+                            direction=candidate.direction,
+                            discovery_score=str(candidate.ranking_score),
+                            round_index=watch_round,
+                            observed_at_ms=now_ms,
+                            candidate_timestamp_ms=run.completed_at_ms,
+                            status=HotWatchStatus.ERROR,
+                            reasons=(detail,),
+                        ),
                     )
-                )
-            except (PersistenceError, BinanceMicrostructureError, ValueError, RuntimeError) as exc:
-                readiness_rows.append(
-                    {
-                        "symbol": candidate.symbol,
-                        "status": "ERROR",
-                        "signal_id": None,
-                        "reasons": [str(exc)],
-                    }
-                )
+                    readiness_rows.append(
+                        {
+                            "symbol": candidate.symbol,
+                            "status": "ERROR",
+                            "hot_status": HotWatchStatus.ERROR.value,
+                            "watch_round": watch_round,
+                            "signal_id": None,
+                            "reasons": [detail],
+                        }
+                    )
+                    if watch_round < max_rounds:
+                        next_active.append(candidate)
+
+            active_hot = next_active
 
         selected: DurableReadySignal | None = None
         selected_is_stack = False
@@ -436,7 +580,9 @@ def run_scanner_cycle() -> ScannerCycleResult:
                     correlated_risk_slots_in_use=correlated_slots,
                 )
                 if skip is not None:
-                    execution_skips.append({"symbol": ready.candidate.symbol, "reason": skip})
+                    execution_skips.append(
+                        {"symbol": ready.candidate.symbol, "reason": skip}
+                    )
                     continue
                 same_symbol = any(
                     position.symbol == ready.candidate.symbol
@@ -485,7 +631,11 @@ def run_scanner_cycle() -> ScannerCycleResult:
         if selected is not None:
             fresh_snapshot = recover_authoritative_state(private)
             fresh_gate = evaluate_account_execution_gate(fresh_snapshot, safety)
-            fresh_risk_slots, fresh_correlated_slots, fresh_portfolio_risk = _risk_accounting(
+            (
+                fresh_risk_slots,
+                fresh_correlated_slots,
+                fresh_portfolio_risk,
+            ) = _risk_accounting(
                 stack_store,
                 fresh_snapshot,
                 safety,
@@ -501,7 +651,10 @@ def run_scanner_cycle() -> ScannerCycleResult:
             account_gate = fresh_gate
             if fresh_gate.blocked:
                 execution_skips.append(
-                    {"symbol": selected.candidate.symbol, "reason": "ACCOUNT_GATE_CHANGED"}
+                    {
+                        "symbol": selected.candidate.symbol,
+                        "reason": "ACCOUNT_GATE_CHANGED",
+                    }
                 )
                 selected = None
             else:
@@ -607,8 +760,11 @@ def run_scanner_cycle() -> ScannerCycleResult:
         candidate_count=sum(
             result.status is DiscoveryStatus.CANDIDATE for result in run.results
         ),
+        hot_candidate_count=len(hot_candidates),
+        fast_watch_rounds=fast_watch_rounds,
         durable_signal_ids=tuple(ready.signal_id for ready in ready_signals),
         readiness=tuple(readiness_rows),
+        hot_watch=tuple(hot_watch_rows),
         microstructure_failures=tuple(micro_failures),
         execution_skips=tuple(execution_skips),
         stack_recovery=_recovery_dict(recovery_result),
@@ -624,8 +780,6 @@ def main() -> None:
     payload = asdict(result)
     payload["execution_result"] = _execution_dict(result.execution_result)
     print(json.dumps(payload, indent=2, sort_keys=True))
-    if result.status == "FAIL_EXECUTION_ATTEMPT":
-        raise SystemExit(2)
 
 
 if __name__ == "__main__":
