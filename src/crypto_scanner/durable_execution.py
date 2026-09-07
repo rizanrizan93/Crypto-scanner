@@ -290,7 +290,9 @@ class DurableExecutionCoordinator:
             if position.is_open and position.symbol == plan.symbol
         )
         if len(open_positions) != 1:
-            raise DurableExecutionError("expected exactly one authoritative open position after fill")
+            raise DurableExecutionError(
+                "expected exactly one authoritative open position after fill"
+            )
         position = open_positions[0]
         entry_time_ms = min(fill.time_ms for fill in fills)
         position_id = self.linkage.save_open_position(
