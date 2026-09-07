@@ -15,6 +15,7 @@ class ExecutionPlanError(RuntimeError):
 
 
 MAX_AVAILABLE_MARGIN_UTILIZATION = Decimal("0.90")
+_HIGH_CORRELATION_BUCKET = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +77,10 @@ def build_entry_order_plan(
     instrument: InstrumentInfo,
     safety: SafetyContract | None = None,
     risk_fraction: Decimal = Decimal("0.005"),
+    allow_same_symbol: bool = False,
+    risk_slots_in_use: int | None = None,
+    correlated_risk_slots_in_use: int | None = None,
+    portfolio_planned_risk: Decimal = Decimal(0),
 ) -> EntryOrderPlan:
     safety = safety or SafetyContract()
     safety.validate()
@@ -94,18 +99,32 @@ def build_entry_order_plan(
     max_risk = Decimal(str(safety.max_risk_per_trade))
     if not Decimal(0) < risk_fraction <= max_risk:
         raise ExecutionPlanError("risk_fraction exceeds safety contract")
+    if portfolio_planned_risk < 0:
+        raise ExecutionPlanError("portfolio planned risk cannot be negative")
 
     open_positions = tuple(position for position in positions if position.is_open)
-    if any(position.symbol == geometry.symbol for position in open_positions):
-        raise ExecutionPlanError("one-position-per-symbol guard rejected order")
-    if len(open_positions) >= safety.max_concurrent_positions:
-        raise ExecutionPlanError("max concurrent position guard rejected order")
+    same_symbol_open = any(position.symbol == geometry.symbol for position in open_positions)
+    if same_symbol_open and not allow_same_symbol:
+        raise ExecutionPlanError("same-symbol entry requires profitable stacking admission")
+    if allow_same_symbol and not safety.profitable_stacking_enabled:
+        raise ExecutionPlanError("profitable stacking is disabled by safety contract")
 
-    high_corr = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
-    if geometry.symbol in high_corr:
-        existing_high_corr = sum(position.symbol in high_corr for position in open_positions)
-        if existing_high_corr >= 2:
-            raise ExecutionPlanError("conservative BTC/ETH/SOL concentration guard rejected order")
+    logical_slots = len(open_positions) if risk_slots_in_use is None else risk_slots_in_use
+    if logical_slots < len(open_positions):
+        raise ExecutionPlanError("logical risk-slot count cannot be below open-symbol count")
+    if logical_slots >= safety.max_concurrent_positions:
+        raise ExecutionPlanError("max logical risk-slot guard rejected order")
+
+    if geometry.symbol in _HIGH_CORRELATION_BUCKET:
+        correlated_slots = (
+            sum(position.symbol in _HIGH_CORRELATION_BUCKET for position in open_positions)
+            if correlated_risk_slots_in_use is None
+            else correlated_risk_slots_in_use
+        )
+        if correlated_slots < 0:
+            raise ExecutionPlanError("correlated risk-slot count cannot be negative")
+        if correlated_slots >= safety.max_high_correlation_risk_slots:
+            raise ExecutionPlanError("conservative BTC/ETH/SOL risk-slot guard rejected order")
 
     stop_distance = geometry.initial_risk
     if stop_distance <= 0:
@@ -114,6 +133,10 @@ def build_entry_order_plan(
     equity = wallet.total_equity
     available_balance = wallet.total_available_balance
     risk_amount = equity * risk_fraction
+    max_portfolio_risk = equity * Decimal(str(safety.max_portfolio_risk_fraction))
+    if portfolio_planned_risk >= max_portfolio_risk:
+        raise ExecutionPlanError("portfolio risk budget is already exhausted")
+
     risk_qty = risk_amount / stop_distance
     leverage_cap = Decimal(str(safety.max_leverage))
     equity_notional_cap = equity * leverage_cap
@@ -139,6 +162,8 @@ def build_entry_order_plan(
     actual_risk = qty * stop_distance
     if actual_risk > risk_amount:
         raise ExecutionPlanError("rounded quantity exceeds requested risk budget")
+    if portfolio_planned_risk + actual_risk > max_portfolio_risk:
+        raise ExecutionPlanError("new layer would breach aggregate portfolio risk cap")
     leverage_equivalent = notional / equity
     if leverage_equivalent > leverage_cap:
         raise ExecutionPlanError("computed notional exceeds leverage safety cap")
