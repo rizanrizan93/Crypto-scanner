@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import os
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 
@@ -16,6 +17,9 @@ MAX_HOT_CANDIDATES = 4
 FAST_WATCH_MAX_ROUNDS = 4
 FAST_WATCH_INTERVAL_SECONDS = 60.0
 CANDIDATE_TTL_MS = 5 * 60_000
+DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
+_DEMO_ACQUISITION_MIN_SCORE = Decimal("60")
+_DEMO_ACQUISITION_MIN_COVERAGE = Decimal("0.72")
 
 
 class HotWatchStatus(StrEnum):
@@ -65,6 +69,27 @@ _INVALIDATING_REASONS = frozenset(
 )
 
 
+def _demo_acquisition_enabled() -> bool:
+    return os.getenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "").strip().upper() == "ENABLED"
+
+
+def _eligible_demo_watch(result: DiscoveryResult) -> bool:
+    return (
+        result.status is DiscoveryStatus.WATCH
+        and result.direction in {TradeDirection.LONG, TradeDirection.SHORT}
+        and result.ranking_score >= _DEMO_ACQUISITION_MIN_SCORE
+        and result.evidence_coverage >= _DEMO_ACQUISITION_MIN_COVERAGE
+    )
+
+
+def _promote_demo_watch(result: DiscoveryResult) -> DiscoveryResult:
+    return replace(
+        result,
+        status=DiscoveryStatus.CANDIDATE,
+        reasons=tuple(dict.fromkeys((*result.reasons, DEMO_ACQUISITION_REASON))),
+    )
+
+
 def select_hot_candidates(
     results: tuple[DiscoveryResult, ...],
     *,
@@ -72,18 +97,26 @@ def select_hot_candidates(
 ) -> tuple[DiscoveryResult, ...]:
     if not 1 <= limit <= MAX_HOT_CANDIDATES:
         raise ValueError(f"hot candidate limit must be between 1 and {MAX_HOT_CANDIDATES}")
-    candidates = tuple(
-        result
-        for result in results
-        if result.status is DiscoveryStatus.CANDIDATE
-        and result.direction in {TradeDirection.LONG, TradeDirection.SHORT}
+
+    strict = sorted(
+        (
+            result
+            for result in results
+            if result.status is DiscoveryStatus.CANDIDATE
+            and result.direction in {TradeDirection.LONG, TradeDirection.SHORT}
+        ),
+        key=lambda result: (-result.ranking_score, result.symbol),
     )
-    return tuple(
-        sorted(
-            candidates,
-            key=lambda result: (-result.ranking_score, result.symbol),
-        )[:limit]
+    selected = list(strict[:limit])
+    if len(selected) >= limit or not _demo_acquisition_enabled():
+        return tuple(selected)
+
+    acquisition_pool = sorted(
+        (_promote_demo_watch(result) for result in results if _eligible_demo_watch(result)),
+        key=lambda result: (-result.ranking_score, result.symbol),
     )
+    selected.extend(acquisition_pool[: limit - len(selected)])
+    return tuple(selected)
 
 
 def classify_hot_watch(

@@ -2,7 +2,7 @@ name: Crypto Scanner Demo Runtime
 
 on:
   schedule:
-    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   scanner-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 65
     env:
       BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
       BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
@@ -42,18 +42,32 @@ jobs:
       - name: Heartbeat running
         continue-on-error: true
         run: crypto-scanner-heartbeat SCANNER_CYCLE RUNNING
-      - name: Reconcile scanner-owned flat orphans
-        env:
-          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
-        run: crypto-scanner-lifecycle-maintenance
       - name: Disarmed Phase 6 pre-audit
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run armed scanner cycle
+      - name: Run bounded hourly Demo acquisition loop
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
-        run: crypto-scanner-cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cycle in $(seq 1 11); do
+            cycle_started=$(date +%s)
+            echo "=== Demo acquisition cycle ${cycle}/11 ==="
+            crypto-scanner-lifecycle-maintenance
+            crypto-scanner-cycle
+            crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
+
+            if [ "${cycle}" -lt 11 ]; then
+              cycle_finished=$(date +%s)
+              elapsed=$((cycle_finished - cycle_started))
+              remaining=$((300 - elapsed))
+              if [ "${remaining}" -gt 0 ]; then
+                sleep "${remaining}"
+              fi
+            fi
+          done
       - name: Disarmed Phase 6 post-audit
         if: always()
         env:
