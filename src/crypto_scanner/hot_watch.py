@@ -13,6 +13,8 @@ from crypto_scanner.technical import closed_candles
 
 HOT_WATCH_STATE_VERSION = 1
 HOT_WATCH_SCHEMA = "crypto-hot-watch-v1"
+RESEARCH_SCHEMA = "crypto-factor-research-v1"
+RESEARCH_STRATEGY_ID = "EVIDENCE_WEIGHTED_TREND_ORDERFLOW_V1"
 MAX_HOT_CANDIDATES = 4
 FAST_WATCH_MAX_ROUNDS = 4
 FAST_WATCH_INTERVAL_SECONDS = 60.0
@@ -183,6 +185,53 @@ def _move_bps(pair: tuple[Candle, Candle] | None) -> Decimal | None:
     return (pair[1].close - pair[0].close) / pair[0].close * Decimal("10000")
 
 
+def _frame_research_snapshot(candidate: DiscoveryResult) -> dict[str, object]:
+    if candidate.direction not in {TradeDirection.LONG, TradeDirection.SHORT}:
+        return {}
+    bullish = candidate.direction is TradeDirection.LONG
+    expected_bias = "BULLISH" if bullish else "BEARISH"
+    frames: dict[str, object] = {}
+    for frame in candidate.frames:
+        structure_aligned = frame.structure.bias.value == expected_bias
+        ema_aligned = (
+            frame.last_price > frame.regime.ema20 > frame.regime.ema50
+            if bullish
+            else frame.last_price < frame.regime.ema20 < frame.regime.ema50
+        )
+        signed_momentum = frame.regime.momentum10 if bullish else -frame.regime.momentum10
+        momentum_aligned = signed_momentum > 0
+        momentum_to_atr = (
+            signed_momentum / frame.regime.atr_pct
+            if frame.regime.atr_pct > 0
+            else None
+        )
+        frames[frame.timeframe] = {
+            "last_price": str(frame.last_price),
+            "rsi14": str(frame.rsi14),
+            "structure_bias": frame.structure.bias.value,
+            "structure_event": frame.structure.event.value,
+            "last_swing_high": str(frame.structure.last_swing_high),
+            "last_swing_low": str(frame.structure.last_swing_low),
+            "regime": frame.regime.regime.value,
+            "adx14": str(frame.regime.adx14),
+            "atr14": str(frame.regime.atr14),
+            "atr_pct": str(frame.regime.atr_pct),
+            "atr_expansion": str(frame.regime.atr_expansion),
+            "ema20": str(frame.regime.ema20),
+            "ema50": str(frame.regime.ema50),
+            "momentum10": str(frame.regime.momentum10),
+            "direction_signed_momentum10": str(signed_momentum),
+            "direction_signed_momentum_to_atr": (
+                str(momentum_to_atr) if momentum_to_atr is not None else None
+            ),
+            "structure_aligned": structure_aligned,
+            "ema_aligned": ema_aligned,
+            "momentum_aligned": momentum_aligned,
+            "alignment_count": sum((structure_aligned, ema_aligned, momentum_aligned)),
+        }
+    return frames
+
+
 def build_hot_watch_telemetry(
     candidate: DiscoveryResult,
     *,
@@ -193,7 +242,7 @@ def build_hot_watch_telemetry(
     taker_pressure: Decimal | None,
     now_ms: int,
 ) -> dict[str, object]:
-    """Capture 1m/3m trigger evidence without changing execution thresholds."""
+    """Capture trigger and research evidence without changing execution thresholds."""
     one_pair = _closed_pair(candles_1m, interval_minutes=1, now_ms=now_ms)
     three_pair = _closed_pair(candles_3m, interval_minutes=3, now_ms=now_ms)
     one_move = _move_bps(one_pair)
@@ -231,16 +280,61 @@ def build_hot_watch_telemetry(
     if reference_price is not None and reference_price > 0:
         proximity_bps = abs(ticker.mid_price - reference_price) / reference_price * Decimal("10000")
 
+    direction_sign = Decimal(1) if candidate.direction is TradeDirection.LONG else Decimal(-1)
+    signed_book = (
+        orderbook_imbalance * direction_sign if orderbook_imbalance is not None else None
+    )
+    signed_taker = taker_pressure * direction_sign if taker_pressure is not None else None
+    signed_move_1m = one_move * direction_sign if one_move is not None else None
+    signed_move_3m = three_move * direction_sign if three_move is not None else None
+    funding = ticker.funding_rate
+    signed_funding = funding * direction_sign if funding is not None else None
+
     return {
+        "research_schema": RESEARCH_SCHEMA,
+        "strategy_id": RESEARCH_STRATEGY_ID,
+        "captured_at_ms": now_ms,
+        "direction": candidate.direction.value,
+        "discovery_score": str(candidate.ranking_score),
+        "long_score": str(candidate.long_score),
+        "short_score": str(candidate.short_score),
+        "score_separation": str(abs(candidate.long_score - candidate.short_score)),
+        "evidence_coverage": str(candidate.evidence_coverage),
+        "context_bias": candidate.context_bias.value,
+        "context_adjustment_long": str(candidate.context_adjustment_long),
+        "context_adjustment_short": str(candidate.context_adjustment_short),
+        "frames": _frame_research_snapshot(candidate),
         "move_1m_bps": str(one_move) if one_move is not None else None,
         "move_3m_bps": str(three_move) if three_move is not None else None,
+        "direction_signed_move_1m_bps": (
+            str(signed_move_1m) if signed_move_1m is not None else None
+        ),
+        "direction_signed_move_3m_bps": (
+            str(signed_move_3m) if signed_move_3m is not None else None
+        ),
         "one_minute_displacement": displacement,
         "reclaim_or_retest_1m": reclaim_or_retest,
+        "last_price": str(ticker.last_price),
+        "mark_price": str(ticker.mark_price),
+        "index_price": str(ticker.index_price),
         "spread_bps": str(ticker.spread_bps),
+        "volume_24h": str(ticker.volume_24h) if ticker.volume_24h is not None else None,
+        "turnover_24h": str(ticker.turnover_24h) if ticker.turnover_24h is not None else None,
+        "open_interest": str(ticker.open_interest) if ticker.open_interest is not None else None,
+        "funding_rate": str(funding) if funding is not None else None,
+        "direction_signed_funding_rate": (
+            str(signed_funding) if signed_funding is not None else None
+        ),
         "orderbook_imbalance": (
             str(orderbook_imbalance) if orderbook_imbalance is not None else None
         ),
+        "direction_signed_orderbook_imbalance": (
+            str(signed_book) if signed_book is not None else None
+        ),
         "taker_pressure": str(taker_pressure) if taker_pressure is not None else None,
+        "direction_signed_taker_pressure": (
+            str(signed_taker) if signed_taker is not None else None
+        ),
         "distance_to_discovery_reference_bps": (
             str(proximity_bps) if proximity_bps is not None else None
         ),
