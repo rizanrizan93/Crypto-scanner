@@ -31,10 +31,16 @@ class ClosedTradeEvidence:
     funding_fee: Decimal
     net_pnl: Decimal
     trade_ids: tuple[str, ...]
+    entry_order_ids: tuple[str, ...] = ()
 
     @property
     def holding_time_ms(self) -> int:
         return self.exit_time_ms - self.entry_time_ms
+
+    @property
+    def layered_entry(self) -> bool:
+        """True only when the episode increased exposure through multiple entry orders."""
+        return len(self.entry_order_ids) > 1
 
 
 def _signed_qty(fill: UserTradeFill) -> Decimal:
@@ -69,7 +75,7 @@ def reconstruct_closed_trades(
     fills: tuple[UserTradeFill, ...],
     income: tuple[IncomeRecord, ...] = (),
 ) -> tuple[ClosedTradeEvidence, ...]:
-    """Reconstruct flat-to-flat episodes under the one-position-per-symbol contract."""
+    """Reconstruct flat-to-flat episodes under the One-way net-position contract."""
     results: list[ClosedTradeEvidence] = []
     by_symbol: dict[str, list[UserTradeFill]] = {}
     for fill in fills:
@@ -88,6 +94,8 @@ def reconstruct_closed_trades(
         realized_pnl = Decimal(0)
         commission = Decimal(0)
         trade_ids: list[str] = []
+        entry_order_ids: list[str] = []
+        seen_entry_order_ids: set[str] = set()
 
         for fill in sorted(symbol_fills, key=lambda item: (item.time_ms, item.trade_id)):
             signed = _signed_qty(fill)
@@ -108,12 +116,17 @@ def reconstruct_closed_trades(
                 realized_pnl = Decimal(0)
                 commission = Decimal(0)
                 trade_ids = []
+                entry_order_ids = []
+                seen_entry_order_ids = set()
 
             assert direction is not None
             increasing = before == 0 or (before > 0 and signed > 0) or (before < 0 and signed < 0)
             if increasing:
                 opening_qty += fill.qty
                 opening_notional += fill.qty * fill.price
+                if fill.order_id not in seen_entry_order_ids:
+                    seen_entry_order_ids.add(fill.order_id)
+                    entry_order_ids.append(fill.order_id)
             else:
                 if fill.qty > abs(before):
                     raise ClosedTradeError(
@@ -153,6 +166,7 @@ def reconstruct_closed_trades(
                         funding_fee=funding_fee,
                         net_pnl=realized_pnl + funding_fee - commission,
                         trade_ids=tuple(trade_ids),
+                        entry_order_ids=tuple(entry_order_ids),
                     )
                 )
                 direction = None
