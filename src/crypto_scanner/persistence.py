@@ -133,20 +133,35 @@ class SupabaseRestClient:
             not column.replace("_", "").isalnum() for column in on_conflict
         ):
             raise PersistenceError("invalid persistence conflict target")
+
+        normalized = tuple(_without_none(row) for row in rows)
+        groups: dict[tuple[str, ...], list[dict[str, object]]] = {}
+        for row in normalized:
+            missing_conflict = tuple(column for column in on_conflict if column not in row)
+            if missing_conflict:
+                raise PersistenceError(
+                    "persistence row is missing conflict columns: "
+                    + ",".join(missing_conflict)
+                )
+            signature = tuple(sorted(row))
+            groups.setdefault(signature, []).append(row)
+
         url = f"{self.base_url}/rest/v1/{table}"
         params = {"on_conflict": ",".join(on_conflict)}
-        payload = [_without_none(row) for row in rows]
-        response = self._client.post(
-            url,
-            params=params,
-            headers=self._headers(prefer="resolution=merge-duplicates,return=minimal"),
-            json=payload,
-        )
-        if response.is_error:
-            detail = response.text[:500]
-            raise PersistenceError(
-                f"Supabase upsert failed table={table} status={response.status_code}: {detail}"
+        for signature, payload in groups.items():
+            response = self._client.post(
+                url,
+                params=params,
+                headers=self._headers(prefer="resolution=merge-duplicates,return=minimal"),
+                json=payload,
             )
+            if response.is_error:
+                detail = response.text[:500]
+                columns = ",".join(signature)
+                raise PersistenceError(
+                    f"Supabase upsert failed table={table} columns={columns} "
+                    f"status={response.status_code}: {detail}"
+                )
 
     def schema_version(self) -> str:
         url = f"{self.base_url}/rest/v1/schema_meta"
