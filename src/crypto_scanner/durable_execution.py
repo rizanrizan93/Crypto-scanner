@@ -15,6 +15,7 @@ from crypto_scanner.binance.private_write import (
     UnknownSubmissionOutcome,
     build_protection_plan,
 )
+from crypto_scanner.discovery import TradeDirection
 from crypto_scanner.execution_plan import (
     MAX_AVAILABLE_MARGIN_UTILIZATION,
     EntryOrderPlan,
@@ -24,6 +25,8 @@ from crypto_scanner.execution_plan import (
 )
 from crypto_scanner.fast_lane import ReadinessDecision, ReadinessStatus
 from crypto_scanner.safety import SafetyContract
+from crypto_scanner.stack_store import DurableStackState, DurableStackStore
+from crypto_scanner.stacking import DurableLayer, StackClassification
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 
@@ -89,6 +92,7 @@ class DurableExecutionCoordinator:
         linkage: DurableTradeLinkage,
         arm: TestnetExecutionArm,
         safety: SafetyContract | None = None,
+        stack_store: DurableStackStore | None = None,
         sleep: Callable[[float], None] = time.sleep,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
@@ -97,6 +101,7 @@ class DurableExecutionCoordinator:
         self.linkage = linkage
         self.arm = arm
         self.safety = safety or SafetyContract()
+        self.stack_store = stack_store
         self.sleep = sleep
         self.now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
 
@@ -153,10 +158,8 @@ class DurableExecutionCoordinator:
         filled_qty: Decimal,
     ) -> tuple[ProtectionPlan, AlgoSubmissionAck, AlgoSubmissionAck]:
         protection = build_protection_plan(plan, filled_qty)
-
         stop_ack = self.writer.submit_stop_loss(protection)
         self._verify_algo_new(stop_ack)
-
         tp2_ack = self.writer.submit_take_profit(protection)
         self._verify_algo_new(tp2_ack)
         return protection, stop_ack, tp2_ack
@@ -184,6 +187,9 @@ class DurableExecutionCoordinator:
         signal_id: str,
         instrument: InstrumentInfo,
         risk_fraction: Decimal = Decimal("0.005"),
+        risk_slots_in_use: int | None = None,
+        correlated_risk_slots_in_use: int | None = None,
+        portfolio_planned_risk: Decimal = Decimal(0),
     ) -> DurableExecutionResult:
         self.safety.validate()
         self.arm.require_enabled()
@@ -207,6 +213,9 @@ class DurableExecutionCoordinator:
                 instrument=instrument,
                 safety=self.safety,
                 risk_fraction=risk_fraction,
+                risk_slots_in_use=risk_slots_in_use,
+                correlated_risk_slots_in_use=correlated_risk_slots_in_use,
+                portfolio_planned_risk=portfolio_planned_risk,
             )
         except ExecutionPlanError as exc:
             raise DurableExecutionError(str(exc)) from exc
@@ -214,11 +223,7 @@ class DurableExecutionCoordinator:
         available_balance = wallet.total_available_balance
         if available_balance is None or available_balance <= 0:
             raise DurableExecutionError("authoritative available balance is missing or invalid")
-        leverage = _required_leverage(
-            plan,
-            self.safety,
-            available_balance=available_balance,
-        )
+        leverage = _required_leverage(plan, self.safety, available_balance=available_balance)
         self.writer.set_leverage(plan.symbol, leverage)
         planned_at_ms = self.now_ms()
         self.linkage.save_entry_plan(
@@ -258,22 +263,13 @@ class DurableExecutionCoordinator:
         if filled_qty <= 0 or filled_qty > plan.qty:
             raise DurableExecutionError("reconciled entry quantity is invalid")
 
-        # Safety before analytics: install exchange-side protection immediately after fill.
         try:
             _protection, stop_ack, tp2_ack = self._install_protection(plan, filled_qty)
         except UnknownSubmissionOutcome:
-            self._persist_post_fill_failure(
-                plan,
-                order,
-                status="FILLED_PROTECTION_UNKNOWN",
-            )
+            self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_UNKNOWN")
             raise
         except (BinanceOrderSubmissionError, DurableExecutionError):
-            self._persist_post_fill_failure(
-                plan,
-                order,
-                status="FILLED_PROTECTION_FAILED",
-            )
+            self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_FAILED")
             raise
 
         fills = self._entry_fills(order)
@@ -294,9 +290,7 @@ class DurableExecutionCoordinator:
             if position.is_open and position.symbol == plan.symbol
         )
         if len(open_positions) != 1:
-            raise DurableExecutionError(
-                "expected exactly one authoritative open position after fill"
-            )
+            raise DurableExecutionError("expected exactly one authoritative open position after fill")
         position = open_positions[0]
         entry_time_ms = min(fill.time_ms for fill in fills)
         position_id = self.linkage.save_open_position(
@@ -314,6 +308,35 @@ class DurableExecutionCoordinator:
             created_at_ms=order.created_time_ms or entry_time_ms,
             updated_at_ms=order.updated_time_ms or self.now_ms(),
         )
+
+        if self.stack_store is not None:
+            direction = TradeDirection.LONG if plan.side == "Buy" else TradeDirection.SHORT
+            initial_layer = DurableLayer(
+                signal_id=signal_id,
+                classification=StackClassification.INITIAL_ENTRY,
+                direction=direction,
+                qty=filled_qty,
+                entry_price=average_entry_price,
+                stop_loss=plan.stop_loss,
+                tp1=plan.take_profit_1,
+                tp2=plan.take_profit_2,
+                risk_amount=plan.risk_amount,
+                opened_at_ms=entry_time_ms,
+                client_order_id=plan.order_link_id,
+            )
+            self.stack_store.save(
+                DurableStackState(
+                    symbol=plan.symbol,
+                    position_id=position_id,
+                    direction=direction,
+                    layers=(initial_layer,),
+                    aggregate_stop_loss=plan.stop_loss,
+                    aggregate_tp2=plan.take_profit_2,
+                    stop_client_algo_id=stop_ack.client_algo_id,
+                    tp2_client_algo_id=tp2_ack.client_algo_id,
+                ),
+                updated_at_ms=self.now_ms(),
+            )
 
         return DurableExecutionResult(
             signal_id=signal_id,

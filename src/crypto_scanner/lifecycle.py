@@ -17,6 +17,7 @@ from crypto_scanner.binance.private_ws import (
     OtherPrivateEvent,
     PrivateEvent,
 )
+from crypto_scanner.safety import SafetyContract
 
 
 class LifecycleError(RuntimeError):
@@ -152,8 +153,11 @@ class LifecycleState:
     def reconcile(
         self,
         snapshot: AuthoritativeLifecycleSnapshot,
+        safety: SafetyContract | None = None,
     ) -> tuple[ReconciliationIssue, ...]:
         """Compare stream-derived state with REST; any material mismatch blocks execution."""
+        safety = safety or SafetyContract()
+        safety.validate()
         issues: list[ReconciliationIssue] = []
         if snapshot.hedged_mode:
             issues.append(
@@ -204,17 +208,23 @@ class LifecycleState:
                     )
                 )
 
-        if len(snapshot.open_positions) > 3:
+        # Exchange-side open symbols are only one dimension of exposure under One-way
+        # Mode. They must never exceed the portfolio risk-slot ceiling; the stricter
+        # logical layer count is enforced by the durable stacking ledger.
+        if len(snapshot.open_positions) > safety.max_concurrent_positions:
             issues.append(
                 ReconciliationIssue(
                     severity=ReconciliationSeverity.BLOCK,
                     code="MAX_POSITIONS_BREACHED",
                     symbol=None,
-                    detail=f"exchange reports {len(snapshot.open_positions)} open positions",
+                    detail=(
+                        f"exchange reports {len(snapshot.open_positions)} open symbols; "
+                        f"safety cap={safety.max_concurrent_positions}"
+                    ),
                 )
             )
         for position in snapshot.open_positions:
-            if position.leverage is None or position.leverage > Decimal("3"):
+            if position.leverage is None or position.leverage > Decimal(str(safety.max_leverage)):
                 issues.append(
                     ReconciliationIssue(
                         severity=ReconciliationSeverity.BLOCK,
