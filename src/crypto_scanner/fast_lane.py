@@ -13,6 +13,7 @@ from crypto_scanner.technical import closed_candles
 
 _ORDERBOOK_ALIGNMENT_THRESHOLD = Decimal("0.05")
 _TAKER_PRESSURE_ALIGNMENT_THRESHOLD = Decimal("0.03")
+_BASE_SPREAD_LIMIT_BPS = Decimal("5")
 _DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
 _DEMO_TEMPORAL_CONFIRMATION_REASON = "DEMO_TEMPORAL_MICROSTRUCTURE_2_OF_3"
 _DEMO_TEMPORAL_WINDOW = 3
@@ -49,6 +50,20 @@ class ReadinessDecision:
     @property
     def execution_ready(self) -> bool:
         return self.status is ReadinessStatus.EXECUTION_READY
+
+
+def effective_spread_limit_bps(
+    ticker: TickerSnapshot,
+    instrument: InstrumentInfo,
+) -> Decimal:
+    """Keep the 5 bps guard, but never demand a spread tighter than one venue tick."""
+    mid_price = ticker.mid_price
+    if mid_price <= 0:
+        raise ValueError("mid price must be positive")
+    if instrument.tick_size <= 0:
+        raise ValueError("tick size must be positive")
+    one_tick_bps = instrument.tick_size / mid_price * Decimal("10000")
+    return max(_BASE_SPREAD_LIMIT_BPS, one_tick_bps)
 
 
 def _aligned_microstructure(
@@ -177,10 +192,12 @@ def evaluate_execution_readiness(
 
     try:
         spread_bps = ticker.spread_bps
+        spread_limit_bps = effective_spread_limit_bps(ticker, instrument)
     except ValueError:
         spread_bps = Decimal("999999")
+        spread_limit_bps = _BASE_SPREAD_LIMIT_BPS
         reasons.append("INVALID_QUOTE")
-    if spread_bps > Decimal("5"):
+    if spread_bps > spread_limit_bps:
         reasons.append("SPREAD_TOO_WIDE")
 
     temporal_micro_confirmed = _demo_temporal_microstructure_confirmed(
