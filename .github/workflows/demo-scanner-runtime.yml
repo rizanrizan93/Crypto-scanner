@@ -15,7 +15,7 @@ concurrency:
 jobs:
   scanner-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     env:
       BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
       BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
