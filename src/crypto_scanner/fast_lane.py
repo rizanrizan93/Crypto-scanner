@@ -9,6 +9,7 @@ from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
 from crypto_scanner.signal_geometry import GeometryError, SignalGeometry, build_signal_geometry
 from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
+from crypto_scanner.structure import StructuralBias
 from crypto_scanner.technical import closed_candles
 
 _ORDERBOOK_ALIGNMENT_THRESHOLD = Decimal("0.05")
@@ -16,8 +17,12 @@ _TAKER_PRESSURE_ALIGNMENT_THRESHOLD = Decimal("0.03")
 _BASE_SPREAD_LIMIT_BPS = Decimal("5")
 _DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
 _DEMO_TEMPORAL_CONFIRMATION_REASON = "DEMO_TEMPORAL_MICROSTRUCTURE_2_OF_3"
+_DEMO_TECHNICAL_FIRST_REASON = "DEMO_TECHNICAL_FIRST_15M_MICRO_SOFT_CONFIRMATION"
 _DEMO_TEMPORAL_WINDOW = 3
 _DEMO_TEMPORAL_REQUIRED_SUPPORT = 2
+_DEMO_TECHNICAL_SCORE_FLOOR = Decimal("50")
+_DEMO_TECHNICAL_MIN_COVERAGE = Decimal("0.72")
+_DEMO_STRONGLY_ADVERSE_MICRO_THRESHOLD = Decimal("0.20")
 _DEMO_MICRO_HISTORY: dict[
     tuple[str, int, TradeDirection],
     list[tuple[int, bool, bool]],
@@ -76,6 +81,77 @@ def _aligned_microstructure(
     if direction is TradeDirection.SHORT:
         return value <= -threshold
     return False
+
+
+def _signed_for_direction(direction: TradeDirection, value: Decimal) -> Decimal:
+    if direction is TradeDirection.LONG:
+        return value
+    if direction is TradeDirection.SHORT:
+        return -value
+    return Decimal(0)
+
+
+def _technical_15m_confirmed(candidate: DiscoveryResult) -> bool:
+    if candidate.direction not in {TradeDirection.LONG, TradeDirection.SHORT}:
+        return False
+    frame = next((item for item in candidate.frames if item.timeframe == "15"), None)
+    if frame is None:
+        return False
+
+    bullish = candidate.direction is TradeDirection.LONG
+    structure_aligned = (
+        bullish and frame.structure.bias is StructuralBias.BULLISH
+    ) or (
+        not bullish and frame.structure.bias is StructuralBias.BEARISH
+    )
+    ema_aligned = (
+        bullish and frame.last_price > frame.regime.ema20 > frame.regime.ema50
+    ) or (
+        not bullish and frame.last_price < frame.regime.ema20 < frame.regime.ema50
+    )
+    momentum_aligned = (
+        bullish and frame.regime.momentum10 > 0
+    ) or (
+        not bullish and frame.regime.momentum10 < 0
+    )
+    return sum((structure_aligned, ema_aligned, momentum_aligned)) >= 2
+
+
+def _demo_technical_first_enabled(candidate: DiscoveryResult) -> bool:
+    execution_enabled = (
+        os.getenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "").strip().upper() == "ENABLED"
+    )
+    return (
+        execution_enabled
+        and candidate.status is DiscoveryStatus.CANDIDATE
+        and candidate.direction in {TradeDirection.LONG, TradeDirection.SHORT}
+        and candidate.ranking_score > _DEMO_TECHNICAL_SCORE_FLOOR
+        and candidate.evidence_coverage >= _DEMO_TECHNICAL_MIN_COVERAGE
+        and _technical_15m_confirmed(candidate)
+    )
+
+
+def _strongly_adverse_microstructure(
+    candidate: DiscoveryResult,
+    evidence: FastLaneEvidence,
+) -> bool:
+    if candidate.direction not in {TradeDirection.LONG, TradeDirection.SHORT}:
+        return False
+    if not _micro_value_valid(evidence.orderbook_imbalance) or not _micro_value_valid(
+        evidence.taker_pressure
+    ):
+        return False
+    assert evidence.orderbook_imbalance is not None
+    assert evidence.taker_pressure is not None
+    orderbook_signed = _signed_for_direction(
+        candidate.direction,
+        evidence.orderbook_imbalance,
+    )
+    taker_signed = _signed_for_direction(candidate.direction, evidence.taker_pressure)
+    return (
+        orderbook_signed <= -_DEMO_STRONGLY_ADVERSE_MICRO_THRESHOLD
+        and taker_signed <= -_DEMO_STRONGLY_ADVERSE_MICRO_THRESHOLD
+    )
 
 
 def _demo_temporal_enabled(candidate: DiscoveryResult) -> bool:
@@ -205,6 +281,8 @@ def evaluate_execution_readiness(
         evidence,
         book_age=book_age,
     )
+    demo_technical_first = _demo_technical_first_enabled(candidate)
+    strongly_adverse_micro = _strongly_adverse_microstructure(candidate, evidence)
     orderbook_aligned = False
     taker_aligned = False
 
@@ -218,7 +296,11 @@ def evaluate_execution_readiness(
             evidence.orderbook_imbalance,
             _ORDERBOOK_ALIGNMENT_THRESHOLD,
         )
-        if not orderbook_aligned and not temporal_micro_confirmed:
+        if (
+            not orderbook_aligned
+            and not temporal_micro_confirmed
+            and not demo_technical_first
+        ):
             reasons.append("ORDERBOOK_NOT_ALIGNED")
 
     if evidence.taker_pressure is None:
@@ -231,8 +313,11 @@ def evaluate_execution_readiness(
             evidence.taker_pressure,
             _TAKER_PRESSURE_ALIGNMENT_THRESHOLD,
         )
-        if not taker_aligned and not temporal_micro_confirmed:
+        if not taker_aligned and not temporal_micro_confirmed and not demo_technical_first:
             reasons.append("TAKER_PRESSURE_NOT_ALIGNED")
+
+    if demo_technical_first and strongly_adverse_micro:
+        reasons.append("MICROSTRUCTURE_STRONGLY_ADVERSE")
 
     for interval_minutes, candles, label in (
         (3, candles_3m, "3M"),
@@ -283,7 +368,9 @@ def evaluate_execution_readiness(
         )
 
     ready_reasons = ("ALL_HARD_GUARDS_PASSED",)
-    if temporal_micro_confirmed and not (orderbook_aligned and taker_aligned):
+    if demo_technical_first and not (orderbook_aligned and taker_aligned):
+        ready_reasons += (_DEMO_TECHNICAL_FIRST_REASON,)
+    elif temporal_micro_confirmed and not (orderbook_aligned and taker_aligned):
         ready_reasons += (_DEMO_TEMPORAL_CONFIRMATION_REASON,)
     return ReadinessDecision(
         symbol=candidate.symbol,
