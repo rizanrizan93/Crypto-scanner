@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -21,7 +22,13 @@ from crypto_scanner.stacking import (
 NOW = 1_800_000_000_000
 
 
-def _position(*, side: str = "Buy", avg: str = "100", mark: str = "102", pnl: str = "2") -> PositionSnapshot:
+def _position(
+    *,
+    side: str = "Buy",
+    avg: str = "100",
+    mark: str = "102",
+    pnl: str = "2",
+) -> PositionSnapshot:
     return PositionSnapshot(
         symbol="XRPUSDT",
         side=side,
@@ -106,7 +113,9 @@ def _admission(
     position = position or _position()
     readiness = readiness or _readiness()
     layers = layers if layers is not None else (_layer(),)
-    direction = TradeDirection.LONG if position.side == "Buy" else TradeDirection.SHORT
+    direction = (
+        TradeDirection.LONG if position.side == "Buy" else TradeDirection.SHORT
+    )
     return evaluate_stack_admission(
         position=position,
         protection=_protected(),
@@ -169,17 +178,21 @@ def test_losing_position_is_rejected(
     pnl: str,
     direction: TradeDirection,
 ) -> None:
-    layer = _layer() if direction is TradeDirection.LONG else DurableLayer(
-        signal_id="sig-old-short",
-        classification=StackClassification.INITIAL_ENTRY,
-        direction=TradeDirection.SHORT,
-        qty=Decimal("1"),
-        entry_price=Decimal("100"),
-        stop_loss=Decimal("102"),
-        tp1=Decimal("97"),
-        tp2=Decimal("94"),
-        risk_amount=Decimal("5"),
-        opened_at_ms=NOW - 60_000,
+    layer = (
+        _layer()
+        if direction is TradeDirection.LONG
+        else DurableLayer(
+            signal_id="sig-old-short",
+            classification=StackClassification.INITIAL_ENTRY,
+            direction=TradeDirection.SHORT,
+            qty=Decimal("1"),
+            entry_price=Decimal("100"),
+            stop_loss=Decimal("102"),
+            tp1=Decimal("97"),
+            tp2=Decimal("94"),
+            risk_amount=Decimal("5"),
+            opened_at_ms=NOW - 60_000,
+        )
     )
     decision = _admission(
         position=_position(side=side, avg="100", mark=mark, pnl=pnl),
@@ -191,7 +204,9 @@ def test_losing_position_is_rejected(
 
 
 def test_break_even_or_tiny_profit_is_rejected_by_buffer() -> None:
-    decision = _admission(position=_position(avg="100", mark="100.1", pnl="0.1"))
+    decision = _admission(
+        position=_position(avg="100", mark="100.1", pnl="0.1")
+    )
     assert not decision.allowed
     assert "INSUFFICIENT_PROFIT_BUFFER" in decision.reasons
 
@@ -239,38 +254,24 @@ def test_ten_total_logical_slots_are_rejected() -> None:
 
 
 def test_high_correlation_bucket_counts_logical_slots() -> None:
-    position = _position()
-    position = PositionSnapshot(
-        **{name: getattr(position, name) for name in position.__dataclass_fields__ if name != "symbol"},
-        symbol="BTCUSDT",
-    )
+    position = replace(_position(), symbol="BTCUSDT")
     readiness = _readiness()
     geometry = readiness.geometry
     assert geometry is not None
     readiness = ReadinessDecision(
         symbol="BTCUSDT",
         status=readiness.status,
-        geometry=SignalGeometry(
-            symbol="BTCUSDT",
-            direction=geometry.direction,
-            entry_mode=geometry.entry_mode,
-            entry_price=geometry.entry_price,
-            stop_loss=geometry.stop_loss,
-            take_profit_1=geometry.take_profit_1,
-            take_profit_2=geometry.take_profit_2,
-            initial_risk=geometry.initial_risk,
-            rr_tp1=geometry.rr_tp1,
-            rr_tp2=geometry.rr_tp2,
-            reference_swing=geometry.reference_swing,
-            breakout_level=geometry.breakout_level,
-            atr_3m=geometry.atr_3m,
-            chase_atr=geometry.chase_atr,
-        ),
+        geometry=replace(geometry, symbol="BTCUSDT"),
         reasons=readiness.reasons,
     )
     decision = evaluate_stack_admission(
         position=position,
-        protection=ProtectionReport("BTCUSDT", ProtectionStatus.PROTECTED, False, "ok"),
+        protection=ProtectionReport(
+            "BTCUSDT",
+            ProtectionStatus.PROTECTED,
+            False,
+            "ok",
+        ),
         readiness=readiness,
         signal_id="sig-new-btc",
         signal_expires_at_ms=NOW + 1,
