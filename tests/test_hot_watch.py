@@ -28,15 +28,16 @@ def _candidate(
     status: DiscoveryStatus = DiscoveryStatus.CANDIDATE,
     coverage: str = "1",
     direction: TradeDirection = TradeDirection.LONG,
+    short_score: str = "10",
 ) -> DiscoveryResult:
     return DiscoveryResult(
         symbol=symbol,
         direction=direction,
         status=status,
         base_long_score=Decimal(score),
-        base_short_score=Decimal("10"),
+        base_short_score=Decimal(short_score),
         long_score=Decimal(score),
-        short_score=Decimal("10"),
+        short_score=Decimal(short_score),
         evidence_coverage=Decimal(coverage),
         frames=(),
         reasons=("candidate",),
@@ -82,40 +83,60 @@ def test_demo_acquisition_is_disabled_when_execution_is_not_armed(
 ) -> None:
     monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "DISABLED")
     results = (
-        _candidate("BTCUSDT", "64", status=DiscoveryStatus.WATCH),
-        _candidate("ETHUSDT", "63", status=DiscoveryStatus.WATCH),
+        _candidate("BTCUSDT", "52", status=DiscoveryStatus.WATCH),
+        _candidate("ETHUSDT", "51", status=DiscoveryStatus.WATCH),
     )
     assert select_hot_candidates(results) == ()
 
 
-def test_demo_acquisition_promotes_high_quality_watch_with_provenance(
+def test_demo_acquisition_promotes_watch_above_50_with_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
     strict = _candidate("SOLUSDT", "70")
-    promoted = _candidate("BTCUSDT", "64", status=DiscoveryStatus.WATCH)
+    promoted = _candidate("BTCUSDT", "50.01", status=DiscoveryStatus.WATCH)
     selected = select_hot_candidates((promoted, strict))
 
     assert tuple(item.symbol for item in selected) == ("SOLUSDT", "BTCUSDT")
     assert selected[1].status is DiscoveryStatus.CANDIDATE
+    assert selected[1].direction is TradeDirection.LONG
     assert DEMO_ACQUISITION_REASON in selected[1].reasons
     assert promoted.status is DiscoveryStatus.WATCH
     assert DEMO_ACQUISITION_REASON not in promoted.reasons
 
 
+def test_demo_acquisition_can_infer_direction_for_neutral_watch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
+    neutral = _candidate(
+        "BTCUSDT",
+        "52",
+        status=DiscoveryStatus.WATCH,
+        direction=TradeDirection.NEUTRAL,
+        short_score="46",
+    )
+    selected = select_hot_candidates((neutral,))
+
+    assert len(selected) == 1
+    assert selected[0].direction is TradeDirection.LONG
+    assert selected[0].status is DiscoveryStatus.CANDIDATE
+    assert neutral.direction is TradeDirection.NEUTRAL
+
+
 @pytest.mark.parametrize(
-    ("score", "coverage", "direction"),
+    ("score", "coverage", "short_score"),
     [
-        ("59.99", "1", TradeDirection.LONG),
-        ("64", "0.71", TradeDirection.LONG),
-        ("64", "1", TradeDirection.NEUTRAL),
+        ("50", "1", "10"),
+        ("52", "0.71", "10"),
+        ("52", "1", "49"),
     ],
 )
-def test_demo_acquisition_does_not_promote_below_bounded_floor(
+def test_demo_acquisition_keeps_bounded_floor_and_direction_separation(
     monkeypatch: pytest.MonkeyPatch,
     score: str,
     coverage: str,
-    direction: TradeDirection,
+    short_score: str,
 ) -> None:
     monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
     result = _candidate(
@@ -123,7 +144,8 @@ def test_demo_acquisition_does_not_promote_below_bounded_floor(
         score,
         status=DiscoveryStatus.WATCH,
         coverage=coverage,
-        direction=direction,
+        direction=TradeDirection.NEUTRAL,
+        short_score=short_score,
     )
     assert select_hot_candidates((result,)) == ()
 
