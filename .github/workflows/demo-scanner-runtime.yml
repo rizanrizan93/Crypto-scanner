@@ -1,6 +1,13 @@
 name: Crypto Scanner Demo Runtime
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/demo-scanner-runtime.yml"
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
@@ -46,20 +53,25 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run bounded hourly Demo acquisition loop
+      - name: Run bounded Demo acquisition loop
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         shell: bash
         run: |
           set -euo pipefail
-          for cycle in $(seq 1 11); do
+          total_cycles=11
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            total_cycles=1
+          fi
+
+          for cycle in $(seq 1 "${total_cycles}"); do
             cycle_started=$(date +%s)
-            echo "=== Demo acquisition cycle ${cycle}/11 ==="
+            echo "=== Demo acquisition cycle ${cycle}/${total_cycles} ==="
             crypto-scanner-lifecycle-maintenance
             crypto-scanner-cycle
             crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
 
-            if [ "${cycle}" -lt 11 ]; then
+            if [ "${cycle}" -lt "${total_cycles}" ]; then
               cycle_finished=$(date +%s)
               elapsed=$((cycle_finished - cycle_started))
               remaining=$((300 - elapsed))
