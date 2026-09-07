@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
@@ -102,6 +103,23 @@ def _geometry() -> SignalGeometry:
     )
 
 
+def _evidence(
+    now_ms: int,
+    *,
+    orderbook: str,
+    taker: str,
+    timestamp_offset_ms: int,
+    book_age_ms: int = 500,
+) -> FastLaneEvidence:
+    return FastLaneEvidence(
+        quote_timestamp_ms=now_ms - 500,
+        candidate_timestamp_ms=now_ms - 60_000,
+        orderbook_timestamp_ms=now_ms - book_age_ms - timestamp_offset_ms,
+        orderbook_imbalance=Decimal(orderbook),
+        taker_pressure=Decimal(taker),
+    )
+
+
 def test_stale_quote_rejects_before_geometry(monkeypatch) -> None:
     import crypto_scanner.fast_lane as module
 
@@ -183,3 +201,168 @@ def test_all_hard_guards_can_produce_execution_ready(monkeypatch) -> None:
     assert decision.execution_ready
     assert decision.geometry is not None
     assert decision.reasons == ("ALL_HARD_GUARDS_PASSED",)
+
+
+def test_demo_promoted_candidate_can_use_temporal_microstructure(monkeypatch) -> None:
+    import crypto_scanner.fast_lane as module
+
+    now_ms = 1_800_000_000_000
+    module._DEMO_MICRO_HISTORY.clear()
+    monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
+    monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
+    candidate = replace(
+        _candidate(),
+        reasons=(
+            "DISCOVERY_EVIDENCE_ALIGNED",
+            "DEMO_CALIBRATION_ACQUISITION_PROMOTED",
+        ),
+    )
+
+    first = evaluate_execution_readiness(
+        candidate,
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=_ticker(),
+        instrument=_instrument(),
+        evidence=_evidence(
+            now_ms,
+            orderbook="0.10",
+            taker="-0.08",
+            timestamp_offset_ms=0,
+        ),
+        now_ms=now_ms,
+    )
+    second = evaluate_execution_readiness(
+        candidate,
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=_ticker(),
+        instrument=_instrument(),
+        evidence=_evidence(
+            now_ms,
+            orderbook="0.12",
+            taker="-0.06",
+            timestamp_offset_ms=100,
+        ),
+        now_ms=now_ms,
+    )
+    third = evaluate_execution_readiness(
+        candidate,
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=_ticker(),
+        instrument=_instrument(),
+        evidence=_evidence(
+            now_ms,
+            orderbook="-0.10",
+            taker="0.08",
+            timestamp_offset_ms=200,
+        ),
+        now_ms=now_ms,
+    )
+
+    assert first.status is ReadinessStatus.REJECTED
+    assert second.status is ReadinessStatus.REJECTED
+    assert "TAKER_PRESSURE_NOT_ALIGNED" in first.reasons
+    assert "TAKER_PRESSURE_NOT_ALIGNED" in second.reasons
+    assert third.status is ReadinessStatus.EXECUTION_READY
+    assert third.execution_ready
+    assert third.reasons == (
+        "ALL_HARD_GUARDS_PASSED",
+        "DEMO_TEMPORAL_MICROSTRUCTURE_2_OF_3",
+    )
+
+
+def test_strict_candidate_does_not_use_demo_temporal_override(monkeypatch) -> None:
+    import crypto_scanner.fast_lane as module
+
+    now_ms = 1_800_000_000_000
+    module._DEMO_MICRO_HISTORY.clear()
+    monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
+    monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
+    candidate = _candidate()
+
+    for offset, orderbook, taker in (
+        (0, "0.10", "-0.08"),
+        (100, "0.12", "-0.06"),
+    ):
+        decision = evaluate_execution_readiness(
+            candidate,
+            candles_3m=_candles(3, now_ms),
+            candles_5m=_candles(5, now_ms),
+            ticker=_ticker(),
+            instrument=_instrument(),
+            evidence=_evidence(
+                now_ms,
+                orderbook=orderbook,
+                taker=taker,
+                timestamp_offset_ms=offset,
+            ),
+            now_ms=now_ms,
+        )
+        assert decision.status is ReadinessStatus.REJECTED
+
+    third = evaluate_execution_readiness(
+        candidate,
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=_ticker(),
+        instrument=_instrument(),
+        evidence=_evidence(
+            now_ms,
+            orderbook="-0.10",
+            taker="0.08",
+            timestamp_offset_ms=200,
+        ),
+        now_ms=now_ms,
+    )
+    assert third.status is ReadinessStatus.REJECTED
+    assert "ORDERBOOK_NOT_ALIGNED" in third.reasons
+
+
+def test_stale_microstructure_remains_hard_gate_for_demo_temporal(monkeypatch) -> None:
+    import crypto_scanner.fast_lane as module
+
+    now_ms = 1_800_000_000_000
+    module._DEMO_MICRO_HISTORY.clear()
+    monkeypatch.setenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "ENABLED")
+    monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
+    candidate = replace(
+        _candidate(),
+        reasons=("DEMO_CALIBRATION_ACQUISITION_PROMOTED",),
+    )
+
+    for offset in (0, 100):
+        evaluate_execution_readiness(
+            candidate,
+            candles_3m=_candles(3, now_ms),
+            candles_5m=_candles(5, now_ms),
+            ticker=_ticker(),
+            instrument=_instrument(),
+            evidence=_evidence(
+                now_ms,
+                orderbook="0.10",
+                taker="-0.08",
+                timestamp_offset_ms=offset,
+            ),
+            now_ms=now_ms,
+        )
+
+    stale = evaluate_execution_readiness(
+        candidate,
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=_ticker(),
+        instrument=_instrument(),
+        evidence=_evidence(
+            now_ms,
+            orderbook="-0.10",
+            taker="0.08",
+            timestamp_offset_ms=200,
+            book_age_ms=5_000,
+        ),
+        now_ms=now_ms,
+    )
+
+    assert stale.status is ReadinessStatus.REJECTED
+    assert "STALE_ORDERBOOK" in stale.reasons
