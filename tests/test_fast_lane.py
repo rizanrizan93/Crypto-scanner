@@ -179,7 +179,7 @@ def test_missing_microstructure_fails_closed() -> None:
 def test_all_hard_guards_can_produce_execution_ready(monkeypatch) -> None:
     import crypto_scanner.fast_lane as module
 
-    now_ms = 1_800_000_000_000
+    now_ms = 1_800_000_000
     monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
     decision = evaluate_execution_readiness(
         _candidate(),
@@ -366,3 +366,76 @@ def test_stale_microstructure_remains_hard_gate_for_demo_temporal(monkeypatch) -
 
     assert stale.status is ReadinessStatus.REJECTED
     assert "STALE_ORDERBOOK" in stale.reasons
+
+
+def test_one_tick_spread_can_exceed_five_bps_without_being_rejected(monkeypatch) -> None:
+    import crypto_scanner.fast_lane as module
+
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(module, "build_signal_geometry", lambda *_args, **_kwargs: _geometry())
+    ticker = replace(
+        _ticker(),
+        bid_price=Decimal("1.620"),
+        ask_price=Decimal("1.621"),
+    )
+    instrument = replace(_instrument(), tick_size=Decimal("0.001"))
+
+    assert ticker.spread_bps > Decimal("5")
+    decision = evaluate_execution_readiness(
+        _candidate(),
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=ticker,
+        instrument=instrument,
+        evidence=FastLaneEvidence(
+            quote_timestamp_ms=now_ms - 500,
+            candidate_timestamp_ms=now_ms - 60_000,
+            orderbook_timestamp_ms=now_ms - 500,
+            orderbook_imbalance=Decimal("0.10"),
+            taker_pressure=Decimal("0.08"),
+        ),
+        now_ms=now_ms,
+    )
+
+    assert decision.status is ReadinessStatus.EXECUTION_READY
+    assert "SPREAD_TOO_WIDE" not in decision.reasons
+
+
+def test_two_tick_spread_above_tick_aware_limit_is_rejected(monkeypatch) -> None:
+    import crypto_scanner.fast_lane as module
+
+    now_ms = 1_800_000_000_000
+    called = False
+
+    def fake_geometry(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return _geometry()
+
+    monkeypatch.setattr(module, "build_signal_geometry", fake_geometry)
+    ticker = replace(
+        _ticker(),
+        bid_price=Decimal("1.620"),
+        ask_price=Decimal("1.622"),
+    )
+    instrument = replace(_instrument(), tick_size=Decimal("0.001"))
+
+    decision = evaluate_execution_readiness(
+        _candidate(),
+        candles_3m=_candles(3, now_ms),
+        candles_5m=_candles(5, now_ms),
+        ticker=ticker,
+        instrument=instrument,
+        evidence=FastLaneEvidence(
+            quote_timestamp_ms=now_ms - 500,
+            candidate_timestamp_ms=now_ms - 60_000,
+            orderbook_timestamp_ms=now_ms - 500,
+            orderbook_imbalance=Decimal("0.10"),
+            taker_pressure=Decimal("0.08"),
+        ),
+        now_ms=now_ms,
+    )
+
+    assert decision.status is ReadinessStatus.REJECTED
+    assert "SPREAD_TOO_WIDE" in decision.reasons
+    assert not called
