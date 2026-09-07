@@ -28,6 +28,11 @@ class OpenEpisodeEvidence:
     entry_price: Decimal
     current_qty: Decimal
     trade_ids: tuple[str, ...]
+    entry_order_ids: tuple[str, ...] = ()
+
+    @property
+    def layered_entry(self) -> bool:
+        return len(self.entry_order_ids) > 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +91,8 @@ def infer_open_episode(
     running = Decimal(0)
     episode_start_ms: int | None = None
     episode_trade_ids: list[str] = []
+    entry_order_ids: list[str] = []
+    seen_entry_order_ids: set[str] = set()
     seen_trade_ids: set[str] = set()
 
     for fill in symbol_fills:
@@ -104,11 +111,23 @@ def infer_open_episode(
         if before == 0 and after != 0:
             episode_start_ms = fill.time_ms
             episode_trade_ids = []
+            entry_order_ids = []
+            seen_entry_order_ids = set()
         if episode_start_ms is not None:
             episode_trade_ids.append(fill.trade_id)
+            increasing = (
+                before == 0
+                or (before > 0 and signed > 0)
+                or (before < 0 and signed < 0)
+            )
+            if increasing and fill.order_id not in seen_entry_order_ids:
+                seen_entry_order_ids.add(fill.order_id)
+                entry_order_ids.append(fill.order_id)
         if after == 0:
             episode_start_ms = None
             episode_trade_ids = []
+            entry_order_ids = []
+            seen_entry_order_ids = set()
         running = after
 
     if running != expected:
@@ -126,6 +145,7 @@ def infer_open_episode(
         entry_price=position.avg_price,
         current_qty=position.size,
         trade_ids=tuple(episode_trade_ids),
+        entry_order_ids=tuple(entry_order_ids),
     )
 
 
@@ -143,6 +163,7 @@ def episode_from_closed_trade(trade: ClosedTradeEvidence) -> OpenEpisodeEvidence
         entry_price=trade.average_entry_price,
         current_qty=trade.entry_qty,
         trade_ids=trade.trade_ids,
+        entry_order_ids=trade.entry_order_ids,
     )
 
 
