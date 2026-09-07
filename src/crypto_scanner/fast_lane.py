@@ -7,7 +7,12 @@ from enum import StrEnum
 
 from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
-from crypto_scanner.signal_geometry import GeometryError, SignalGeometry, build_signal_geometry
+from crypto_scanner.signal_geometry import (
+    GeometryError,
+    SignalGeometry,
+    build_demo_technical_scalp_geometry,
+    build_signal_geometry,
+)
 from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.structure import StructuralBias
 from crypto_scanner.technical import closed_candles
@@ -18,6 +23,7 @@ _BASE_SPREAD_LIMIT_BPS = Decimal("5")
 _DEMO_ACQUISITION_REASON = "DEMO_CALIBRATION_ACQUISITION_PROMOTED"
 _DEMO_TEMPORAL_CONFIRMATION_REASON = "DEMO_TEMPORAL_MICROSTRUCTURE_2_OF_3"
 _DEMO_TECHNICAL_FIRST_REASON = "DEMO_TECHNICAL_FIRST_15M_MICRO_SOFT_CONFIRMATION"
+_DEMO_TECHNICAL_SCALP_GEOMETRY_REASON = "DEMO_TECHNICAL_15M_SCALP_GEOMETRY"
 _DEMO_TEMPORAL_WINDOW = 3
 _DEMO_TEMPORAL_REQUIRED_SUPPORT = 2
 _DEMO_TECHNICAL_SCORE_FLOOR = Decimal("50")
@@ -340,6 +346,7 @@ def evaluate_execution_readiness(
             reasons.append(f"{label}_DATA_STALE")
 
     geometry: SignalGeometry | None = None
+    used_demo_scalp_geometry = False
     if not reasons:
         try:
             geometry = build_signal_geometry(
@@ -350,8 +357,25 @@ def evaluate_execution_readiness(
                 instrument=instrument,
                 strategy=strategy,
             )
-        except (GeometryError, ValueError) as exc:
-            reasons.append(f"GEOMETRY_INVALID:{exc}")
+        except (GeometryError, ValueError) as primary_exc:
+            if demo_technical_first:
+                try:
+                    geometry = build_demo_technical_scalp_geometry(
+                        candidate,
+                        candles_3m=candles_3m,
+                        candles_5m=candles_5m,
+                        ticker=ticker,
+                        instrument=instrument,
+                        strategy=strategy,
+                    )
+                    used_demo_scalp_geometry = True
+                except (GeometryError, ValueError) as fallback_exc:
+                    reasons.append(
+                        "GEOMETRY_INVALID:"
+                        f"primary={primary_exc}; demo_fallback={fallback_exc}"
+                    )
+            else:
+                reasons.append(f"GEOMETRY_INVALID:{primary_exc}")
 
     if geometry is not None:
         if geometry.chase_atr > strategy.max_chase_atr:
@@ -372,6 +396,8 @@ def evaluate_execution_readiness(
         ready_reasons += (_DEMO_TECHNICAL_FIRST_REASON,)
     elif temporal_micro_confirmed and not (orderbook_aligned and taker_aligned):
         ready_reasons += (_DEMO_TEMPORAL_CONFIRMATION_REASON,)
+    if used_demo_scalp_geometry:
+        ready_reasons += (_DEMO_TECHNICAL_SCALP_GEOMETRY_REASON,)
     return ReadinessDecision(
         symbol=candidate.symbol,
         status=ReadinessStatus.EXECUTION_READY,
