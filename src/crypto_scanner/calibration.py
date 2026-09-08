@@ -28,6 +28,8 @@ class CalibrationMetrics:
     profit_factor: Decimal | None
     median_mae_r: Decimal | None
     median_mfe_r: Decimal | None
+    mfe_ge_1r_count: int = 0
+    mfe_ge_1r_giveback_loss_rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,14 @@ def _tier(sample_size: int) -> tuple[str, Decimal, Decimal, int]:
     return "SERIOUS_CALIBRATION", Decimal("0.05"), Decimal("0.02"), 20
 
 
+def _profit_lock_adjustment_step(tier: str) -> Decimal:
+    if tier in {"MICRO_ADJUST", "BOUNDED_ADJUST"}:
+        return Decimal("0.05")
+    if tier in {"STRONGER_BOUNDED", "SERIOUS_CALIBRATION"}:
+        return Decimal("0.10")
+    return Decimal(0)
+
+
 def calculate_metrics(rows: tuple[dict[str, object], ...]) -> CalibrationMetrics:
     sample_size = len(rows)
     if not rows:
@@ -94,12 +104,28 @@ def calculate_metrics(rows: tuple[dict[str, object], ...]) -> CalibrationMetrics
         for row in rows
         if (value := _decimal_or_none(row.get("mfe_r"))) is not None
     )
+    lock_candidates = tuple(
+        row
+        for row in rows
+        if (value := _decimal_or_none(row.get("mfe_r"))) is not None
+        and value >= Decimal("1.00")
+    )
+    giveback_losses = sum(
+        Decimal(str(row["net_pnl"])) <= 0 for row in lock_candidates
+    )
+    giveback_rate = (
+        Decimal(giveback_losses) / Decimal(len(lock_candidates))
+        if lock_candidates
+        else None
+    )
     return CalibrationMetrics(
         sample_size=sample_size,
         win_rate=win_rate,
         profit_factor=profit_factor,
         median_mae_r=median(mae) if mae else None,
         median_mfe_r=median(mfe) if mfe else None,
+        mfe_ge_1r_count=len(lock_candidates),
+        mfe_ge_1r_giveback_loss_rate=giveback_rate,
     )
 
 
@@ -146,6 +172,8 @@ def propose_parameters(
     max_chase = current.max_chase_atr
     stop_buffer = current.stop_buffer_atr
     tp2_cap = current.tp2_cap_rr
+    profit_lock_activation = current.profit_lock_activation_r
+    profit_lock_gap = current.profit_lock_gap_r
 
     if poor:
         tightened = _clamp(
@@ -201,12 +229,58 @@ def propose_parameters(
         tp2_cap = None
         reasons.append("RESTORE_FULL_STRUCTURAL_TP2_ON_STRONG_MFE")
 
+    lock_step = _profit_lock_adjustment_step(tier)
+    giveback_rate = metrics.mfe_ge_1r_giveback_loss_rate
+    if (
+        poor
+        and lock_step > 0
+        and metrics.mfe_ge_1r_count >= 3
+        and giveback_rate is not None
+        and giveback_rate >= Decimal("0.50")
+    ):
+        tightened_gap = _clamp(
+            current.profit_lock_gap_r - lock_step,
+            Decimal("0.75"),
+            Decimal("1.25"),
+        )
+        if tightened_gap != current.profit_lock_gap_r:
+            profit_lock_gap = tightened_gap
+            reasons.append("TIGHTEN_PROFIT_LOCK_ON_MFE_GIVEBACK_LOSSES")
+        if metrics.mfe_ge_1r_count >= 5 and giveback_rate >= Decimal("0.70"):
+            earlier_activation = _clamp(
+                current.profit_lock_activation_r - Decimal("0.05"),
+                Decimal("0.90"),
+                Decimal("1.10"),
+            )
+            if earlier_activation != current.profit_lock_activation_r:
+                profit_lock_activation = earlier_activation
+                reasons.append("ACTIVATE_PROFIT_LOCK_EARLIER_ON_PERSISTENT_GIVEBACK")
+    elif (
+        good
+        and lock_step > 0
+        and metrics.mfe_ge_1r_count >= 5
+        and giveback_rate is not None
+        and giveback_rate <= Decimal("0.20")
+        and metrics.median_mfe_r is not None
+        and metrics.median_mfe_r >= Decimal("2.50")
+    ):
+        wider_gap = _clamp(
+            current.profit_lock_gap_r + lock_step,
+            Decimal("0.75"),
+            Decimal("1.25"),
+        )
+        if wider_gap != current.profit_lock_gap_r:
+            profit_lock_gap = wider_gap
+            reasons.append("GIVE_WINNERS_MORE_ROOM_ON_STRONG_LOW_GIVEBACK_EDGE")
+
     proposed = StrategyParameters(
         stop_buffer_atr=stop_buffer,
         max_chase_atr=max_chase,
         min_rr_tp1=current.min_rr_tp1,
         min_rr_tp2=current.min_rr_tp2,
         tp2_cap_rr=tp2_cap,
+        profit_lock_activation_r=profit_lock_activation,
+        profit_lock_gap_r=profit_lock_gap,
     )
     proposed.validate()
     applied = proposed != current
@@ -342,6 +416,8 @@ def run_calibration() -> dict[str, object]:
         "evidence_baseline_sample_size": previous_applied,
         "eligible_only": True,
         "history_complete_only": True,
+        "mfe_ge_1r_count": metrics.mfe_ge_1r_count,
+        "mfe_ge_1r_giveback_loss_rate": metrics.mfe_ge_1r_giveback_loss_rate,
         "live_trading_locked": True,
         "risk_unchanged": True,
         "leverage_unchanged": True,
@@ -388,6 +464,12 @@ def run_calibration() -> dict[str, object]:
         "reasons": list(proposal.reasons),
         "before": proposal.before.to_dict(),
         "after": proposal.after.to_dict(),
+        "mfe_ge_1r_count": metrics.mfe_ge_1r_count,
+        "mfe_ge_1r_giveback_loss_rate": (
+            str(metrics.mfe_ge_1r_giveback_loss_rate)
+            if metrics.mfe_ge_1r_giveback_loss_rate is not None
+            else None
+        ),
         "live_trading_locked": True,
     }
 

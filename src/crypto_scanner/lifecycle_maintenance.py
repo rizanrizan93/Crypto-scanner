@@ -9,12 +9,15 @@ from crypto_scanner.binance.private_rest import (
     BinanceDemoPrivateReadOnlyClient,
 )
 from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
+from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.execution_plan import TestnetExecutionArm
 from crypto_scanner.persistence import SupabasePersistenceConfig
 from crypto_scanner.position_manager_write import cleanup_scanner_orphans
 from crypto_scanner.post_fill_recovery import recover_post_fill_failures
+from crypto_scanner.profit_lock import run_profit_lock
 from crypto_scanner.safety import SafetyContract
+from crypto_scanner.strategy_params import load_strategy_parameters
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _ACTIVE_ALGO_STATUSES = frozenset({"NEW", "PENDING", "WORKING"})
@@ -122,12 +125,14 @@ def main() -> None:
         raise LifecycleMaintenanceError(
             "lifecycle maintenance requires dedicated Crypto Scanner Supabase"
         )
+    strategy = load_strategy_parameters(persistence_config)
 
     with (
         BinanceDemoPrivateReadOnlyClient(
             credentials,
             base_url=config.binance_rest_url,
         ) as reader,
+        BinanceDemoPublicRestClient(base_url=config.binance_rest_url) as public,
         BinanceTestnetOrderClient(
             credentials,
             arm,
@@ -141,11 +146,19 @@ def main() -> None:
             linkage,
             persistence_config,
         )
+        profit_lock = run_profit_lock(
+            reader,
+            public,
+            writer,
+            linkage,
+            strategy,
+        )
         result = run_lifecycle_maintenance(reader, writer, safety=safety)
 
     payload = asdict(result)
     payload["post_fill_recovery"] = asdict(recovery)
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    payload["profit_lock"] = [asdict(item) for item in profit_lock]
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     if recovery.blockers or result.blockers:
         raise SystemExit(2)
 
