@@ -11,6 +11,7 @@ on:
       - "src/crypto_scanner/trajectory_store.py"
       - "src/crypto_scanner/closed_trades.py"
       - "src/crypto_scanner/trade_linkage.py"
+      - "src/crypto_scanner/research_attribution.py"
       - ".github/workflows/demo-trajectory-runtime.yml"
   schedule:
     - cron: "6,21,36,51 * * * *"
@@ -57,6 +58,8 @@ jobs:
         run: crypto-scanner-heartbeat TRAJECTORY_CYCLE RUNNING
       - name: Reconstruct and persist trajectory and closed trades
         run: crypto-scanner-phase7-audit
+      - name: Update research factor attribution
+        run: crypto-scanner-research-attribution
       - name: Heartbeat success
         if: success()
         continue-on-error: true
