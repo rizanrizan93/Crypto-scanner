@@ -54,7 +54,11 @@ def _position() -> PositionSnapshot:
     )
 
 
-def _entry_order(*, status: str = "FILLED", executed: Decimal = Decimal("39499")) -> OrderSnapshot:
+def _entry_order(
+    *,
+    status: str = "FILLED",
+    executed: Decimal = Decimal("39499"),
+) -> OrderSnapshot:
     return OrderSnapshot(
         order_id="venue-42",
         order_link_id=ORDER_ID,
@@ -115,7 +119,12 @@ def _algo(order_type: str, client_id: str, trigger: str) -> AlgoOrderSnapshot:
 
 
 class FakeReader:
-    def __init__(self, *, entry_status: str = "FILLED", executed: Decimal = Decimal("39499")) -> None:
+    def __init__(
+        self,
+        *,
+        entry_status: str = "FILLED",
+        executed: Decimal = Decimal("39499"),
+    ) -> None:
         self.entry_status = entry_status
         self.executed = executed
         self.repaired = False
