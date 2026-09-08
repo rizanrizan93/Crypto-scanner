@@ -77,9 +77,48 @@ def test_taker_flow_can_rank_after_minimum_evidence() -> None:
 
     assert report["status"] == "PRELIMINARY_ATTRIBUTION"
     assert report["strongest_factor"] == "taker_flow_aligned"
+    assert report["strongest_factor_effect"] == "SUPPORTIVE"
     factor = report["factors"]["taker_flow_aligned"]
     assert factor["rank_eligible"] is True
+    assert factor["kind"] == "SINGLE"
+    assert factor["effect"] == "SUPPORTIVE"
     assert Decimal(factor["delta_net_return_bps"]) == Decimal("30")
+
+    interaction = report["factors"]["orderflow_both_aligned"]
+    assert interaction["kind"] == "INTERACTION"
+    assert interaction["rank_eligible"] is False
+    assert interaction["minimum_samples_for_ranking"] == 50
+    assert interaction["minimum_group_samples"] == 10
+
+
+def test_interaction_factor_requires_50_samples_and_balanced_groups() -> None:
+    samples = tuple(
+        _sample(i, taker_aligned=i < 25, return_bps="20" if i < 25 else "-10")
+        for i in range(50)
+    )
+    report = analyze_factor_attribution(samples)
+
+    assert report["status"] == "STRONGER_ATTRIBUTION"
+    interaction = report["factors"]["orderflow_both_aligned"]
+    assert interaction["rank_eligible"] is True
+    assert interaction["effect"] == "SUPPORTIVE"
+    assert Decimal(interaction["delta_net_return_bps"]) == Decimal("30")
+    assert "orderflow_both_aligned" in report["ranked_factors"]
+
+
+def test_negative_delta_is_labeled_adverse_not_supportive() -> None:
+    samples = tuple(
+        _sample(i, taker_aligned=i < 10, return_bps="-20" if i < 10 else "10")
+        for i in range(20)
+    )
+    report = analyze_factor_attribution(samples)
+
+    factor = report["factors"]["taker_flow_aligned"]
+    assert factor["rank_eligible"] is True
+    assert factor["effect"] == "ADVERSE"
+    assert Decimal(factor["delta_net_return_bps"]) == Decimal("-30")
+    assert report["strongest_factor"] == "taker_flow_aligned"
+    assert report["strongest_factor_effect"] == "ADVERSE"
 
 
 def test_build_samples_excludes_pre_instrumentation_trade() -> None:

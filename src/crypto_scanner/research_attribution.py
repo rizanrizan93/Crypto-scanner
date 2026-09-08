@@ -18,6 +18,8 @@ from crypto_scanner.persistence import (
 RESEARCH_STATE_KEY = "research:factor_attribution:v1"
 MIN_ATTRIBUTION_SAMPLES = 20
 MIN_GROUP_SAMPLES = 5
+MIN_INTERACTION_SAMPLES = 50
+MIN_INTERACTION_GROUP_SAMPLES = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,27 +168,70 @@ def _frame(sample: ResearchTradeSample, timeframe: str) -> dict[str, object] | N
     return value if isinstance(value, dict) else None
 
 
+def _alignment(sample: ResearchTradeSample, timeframe: str) -> bool | None:
+    frame = _frame(sample, timeframe)
+    if frame is None:
+        return None
+    count = frame.get("alignment_count")
+    return int(count) == 3 if count is not None else None
+
+
+def _frame_metric_ge(
+    sample: ResearchTradeSample,
+    timeframe: str,
+    field: str,
+    threshold: Decimal,
+) -> bool | None:
+    frame = _frame(sample, timeframe)
+    value = _decimal(frame.get(field)) if frame else None
+    return value >= threshold if value is not None else None
+
+
+def _frame_regime_trend(sample: ResearchTradeSample, timeframe: str) -> bool | None:
+    frame = _frame(sample, timeframe)
+    if frame is None:
+        return None
+    regime = frame.get("regime")
+    if not isinstance(regime, str):
+        return None
+    return regime == "TREND"
+
+
+def _known_all(*values: bool | None) -> bool | None:
+    if any(value is None for value in values):
+        return None
+    return all(value is True for value in values)
+
+
 def _factor_value(sample: ResearchTradeSample, factor: str) -> bool | None:
     telemetry = sample.telemetry
-    if factor in {"trend_15m_full_alignment", "trend_60m_full_alignment"}:
-        timeframe = "15" if "15m" in factor else "60"
-        frame = _frame(sample, timeframe)
-        if frame is None:
-            return None
-        count = frame.get("alignment_count")
-        return int(count) == 3 if count is not None else None
-    if factor in {"adx_15m_ge_20", "adx_60m_ge_20"}:
-        timeframe = "15" if "15m" in factor else "60"
-        frame = _frame(sample, timeframe)
-        value = _decimal(frame.get("adx14")) if frame else None
-        return value >= Decimal(20) if value is not None else None
-    if factor in {"momentum_15m_ge_1atr", "momentum_60m_ge_1atr"}:
-        timeframe = "15" if "15m" in factor else "60"
-        frame = _frame(sample, timeframe)
-        value = (
-            _decimal(frame.get("direction_signed_momentum_to_atr")) if frame else None
+    if factor in {
+        "trend_5m_full_alignment",
+        "trend_15m_full_alignment",
+        "trend_60m_full_alignment",
+    }:
+        timeframe = factor.split("_")[1].removesuffix("m")
+        return _alignment(sample, timeframe)
+    if factor in {"adx_5m_ge_20", "adx_15m_ge_20", "adx_60m_ge_20"}:
+        timeframe = factor.split("_")[1].removesuffix("m")
+        return _frame_metric_ge(sample, timeframe, "adx14", Decimal(20))
+    if factor in {
+        "momentum_5m_ge_1atr",
+        "momentum_15m_ge_1atr",
+        "momentum_60m_ge_1atr",
+    }:
+        timeframe = factor.split("_")[1].removesuffix("m")
+        return _frame_metric_ge(
+            sample,
+            timeframe,
+            "direction_signed_momentum_to_atr",
+            Decimal(1),
         )
-        return value >= Decimal(1) if value is not None else None
+    if factor in {"regime_5m_trend", "regime_15m_trend", "regime_60m_trend"}:
+        timeframe = factor.split("_")[1].removesuffix("m")
+        return _frame_regime_trend(sample, timeframe)
+    if factor == "atr_15m_expanding":
+        return _frame_metric_ge(sample, "15", "atr_expansion", Decimal(1))
     if factor == "taker_flow_aligned":
         value = _decimal(telemetry.get("direction_signed_taker_pressure"))
         return value > 0 if value is not None else None
@@ -227,16 +272,60 @@ def _factor_value(sample: ResearchTradeSample, factor: str) -> bool | None:
     if factor == "same_side_funding_crowded":
         value = _decimal(telemetry.get("direction_signed_funding_rate"))
         return value >= Decimal("0.0005") if value is not None else None
+
+    if factor == "trend_5m_15m_full_alignment":
+        return _known_all(_alignment(sample, "5"), _alignment(sample, "15"))
+    if factor == "trend_15m_60m_full_alignment":
+        return _known_all(_alignment(sample, "15"), _alignment(sample, "60"))
+    if factor == "trend_all_timeframes_full_alignment":
+        return _known_all(
+            _alignment(sample, "5"),
+            _alignment(sample, "15"),
+            _alignment(sample, "60"),
+        )
+    if factor == "regime_5m_15m_trend":
+        return _known_all(
+            _frame_regime_trend(sample, "5"),
+            _frame_regime_trend(sample, "15"),
+        )
+    if factor == "orderflow_both_aligned":
+        return _known_all(
+            _factor_value(sample, "taker_flow_aligned"),
+            _factor_value(sample, "orderbook_flow_aligned"),
+        )
+    if factor == "trend_15m_and_orderflow_both_aligned":
+        return _known_all(
+            _alignment(sample, "15"),
+            _factor_value(sample, "orderflow_both_aligned"),
+        )
+    if factor == "trend_15m_and_low_spread":
+        return _known_all(
+            _alignment(sample, "15"),
+            _factor_value(sample, "spread_le_5bps"),
+        )
+    if factor == "trend_15m_with_3m_pullback":
+        trend = _alignment(sample, "15")
+        move = _factor_value(sample, "move_3m_aligned")
+        if trend is None or move is None:
+            return None
+        return trend and not move
     raise ValueError(f"unknown research factor: {factor}")
 
 
-FACTORS = (
+SINGLE_FACTORS = (
+    "trend_5m_full_alignment",
     "trend_15m_full_alignment",
     "trend_60m_full_alignment",
+    "adx_5m_ge_20",
     "adx_15m_ge_20",
     "adx_60m_ge_20",
+    "momentum_5m_ge_1atr",
     "momentum_15m_ge_1atr",
     "momentum_60m_ge_1atr",
+    "regime_5m_trend",
+    "regime_15m_trend",
+    "regime_60m_trend",
+    "atr_15m_expanding",
     "taker_flow_aligned",
     "orderbook_flow_aligned",
     "move_1m_aligned",
@@ -250,6 +339,19 @@ FACTORS = (
     "context_aligned",
     "same_side_funding_crowded",
 )
+
+INTERACTION_FACTORS = (
+    "trend_5m_15m_full_alignment",
+    "trend_15m_60m_full_alignment",
+    "trend_all_timeframes_full_alignment",
+    "regime_5m_15m_trend",
+    "orderflow_both_aligned",
+    "trend_15m_and_orderflow_both_aligned",
+    "trend_15m_and_low_spread",
+    "trend_15m_with_3m_pullback",
+)
+
+FACTORS = (*SINGLE_FACTORS, *INTERACTION_FACTORS)
 
 
 def _group_stats(samples: tuple[ResearchTradeSample, ...]) -> dict[str, object]:
@@ -274,6 +376,16 @@ def _group_stats(samples: tuple[ResearchTradeSample, ...]) -> dict[str, object]:
         "median_mfe_r": str(median(mfe)) if mfe else None,
         "median_mae_r": str(median(mae)) if mae else None,
     }
+
+
+def _effect(delta_net: Decimal | None) -> str | None:
+    if delta_net is None:
+        return None
+    if delta_net > 0:
+        return "SUPPORTIVE"
+    if delta_net < 0:
+        return "ADVERSE"
+    return "NEUTRAL"
 
 
 def analyze_factor_attribution(
@@ -304,25 +416,41 @@ def analyze_factor_attribution(
             delta_net = true_net - false_net
             delta_price = true_price - false_price
 
+        is_interaction = factor in INTERACTION_FACTORS
+        minimum_samples = (
+            MIN_INTERACTION_SAMPLES if is_interaction else MIN_ATTRIBUTION_SAMPLES
+        )
+        minimum_group_samples = (
+            MIN_INTERACTION_GROUP_SAMPLES if is_interaction else MIN_GROUP_SAMPLES
+        )
         rank_eligible = (
-            len(samples) >= MIN_ATTRIBUTION_SAMPLES
-            and len(true_group) >= MIN_GROUP_SAMPLES
-            and len(false_group) >= MIN_GROUP_SAMPLES
+            len(samples) >= minimum_samples
+            and len(true_group) >= minimum_group_samples
+            and len(false_group) >= minimum_group_samples
             and delta_net is not None
         )
         if rank_eligible and delta_net is not None:
             ranked.append((abs(delta_net), factor))
         factors[factor] = {
+            "kind": "INTERACTION" if is_interaction else "SINGLE",
             "true": true_stats,
             "false": false_stats,
             "missing": len(samples) - len(true_group) - len(false_group),
             "delta_net_return_bps": str(delta_net) if delta_net is not None else None,
             "delta_price_return_bps": str(delta_price) if delta_price is not None else None,
+            "effect": _effect(delta_net),
+            "minimum_samples_for_ranking": minimum_samples,
+            "minimum_group_samples": minimum_group_samples,
             "rank_eligible": rank_eligible,
         }
 
     ranked.sort(reverse=True)
     strongest = ranked[0][1] if ranked else None
+    strongest_effect = (
+        factors[strongest]["effect"]
+        if strongest is not None and isinstance(factors[strongest], dict)
+        else None
+    )
     if len(samples) < MIN_ATTRIBUTION_SAMPLES:
         status = "OBSERVE_ONLY"
     elif len(samples) < 50:
@@ -332,6 +460,16 @@ def analyze_factor_attribution(
     else:
         status = "SERIOUS_ATTRIBUTION"
 
+    ranked_details = [
+        {
+            "factor": name,
+            "kind": factors[name]["kind"],
+            "effect": factors[name]["effect"],
+            "delta_net_return_bps": factors[name]["delta_net_return_bps"],
+            "delta_price_return_bps": factors[name]["delta_price_return_bps"],
+        }
+        for _, name in ranked
+    ]
     return {
         "research_schema": RESEARCH_SCHEMA,
         "strategy_id": RESEARCH_STRATEGY_ID,
@@ -339,8 +477,12 @@ def analyze_factor_attribution(
         "sample_size": len(samples),
         "minimum_samples_for_ranking": MIN_ATTRIBUTION_SAMPLES,
         "minimum_group_samples": MIN_GROUP_SAMPLES,
+        "minimum_interaction_samples_for_ranking": MIN_INTERACTION_SAMPLES,
+        "minimum_interaction_group_samples": MIN_INTERACTION_GROUP_SAMPLES,
         "strongest_factor": strongest,
+        "strongest_factor_effect": strongest_effect,
         "ranked_factors": [name for _, name in ranked],
+        "ranked_factor_details": ranked_details,
         "overall": _group_stats(samples),
         "factors": factors,
         "sample_signal_ids": [item.signal_id for item in samples],
@@ -348,6 +490,8 @@ def analyze_factor_attribution(
             "outcome_primary": "net_return_bps = net_pnl / entry_notional * 10000",
             "outcome_price": "direction-correct entry-to-exit price return in bps",
             "ranking": "absolute true-vs-false difference in mean net return bps",
+            "single_factor_minimum": "20 total / 5 TRUE / 5 FALSE",
+            "interaction_factor_minimum": "50 total / 10 TRUE / 10 FALSE",
             "hindsight_guard": "only entry-time telemetry tagged with research_schema is used",
             "no_automatic_strategy_change_below_20_samples": True,
         },
