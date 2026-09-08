@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 
 import httpx
@@ -154,6 +155,41 @@ def test_supabase_store_upserts_position_trajectory_and_closed_trade() -> None:
     assert '"CLOSED"' in combined
     assert SIGNAL_ID in combined
     assert "top-secret-key" not in combined
+
+
+def test_store_closes_previous_episode_before_reopening_same_symbol() -> None:
+    position_state_batches: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/schema_meta"):
+            return httpx.Response(200, json=[{"value": SCHEMA_VERSION}])
+        if request.method == "POST" and request.url.path.endswith("/positions"):
+            payload = json.loads(request.read().decode())
+            assert isinstance(payload, list)
+            position_state_batches.append([str(row["state"]) for row in payload])
+        return httpx.Response(201, json=[])
+
+    closed = _record(TrajectoryState.CLOSED)
+    open_record = _record()
+    open_record = replace(
+        open_record,
+        snapshot=replace(
+            open_record.snapshot,
+            entry_time_ms=1_400_000,
+            measured_until_ms=1_500_000,
+            holding_time_ms=100_000,
+        ),
+    )
+
+    config = SupabasePersistenceConfig(
+        url="https://abc.supabase.co",
+        service_role_key="secret",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        store = SupabaseTrajectoryStore(config, client=http_client)
+        store.save((open_record, closed))
+
+    assert position_state_batches == [["CLOSED"], ["OPEN"]]
 
 
 def test_schema_mismatch_fails_closed() -> None:
