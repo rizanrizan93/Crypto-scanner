@@ -18,7 +18,8 @@ class StrategyParameters:
 
     Bounds intentionally never relax the original hard quality floors:
     TP1 remains >=1.20R, TP2 remains >=2.00R, chase can only tighten from 0.80 ATR,
-    and stop-buffer changes remain narrowly bounded around the original 0.15 ATR.
+    stop-buffer changes remain narrowly bounded around the original 0.15 ATR, and
+    profit-lock calibration remains within a narrow defensive band.
     """
 
     stop_buffer_atr: Decimal = Decimal("0.15")
@@ -26,6 +27,8 @@ class StrategyParameters:
     min_rr_tp1: Decimal = Decimal("1.20")
     min_rr_tp2: Decimal = Decimal("2.00")
     tp2_cap_rr: Decimal | None = None
+    profit_lock_activation_r: Decimal = Decimal("1.00")
+    profit_lock_gap_r: Decimal = Decimal("1.00")
 
     def validate(self) -> None:
         if not Decimal("0.12") <= self.stop_buffer_atr <= Decimal("0.20"):
@@ -40,6 +43,10 @@ class StrategyParameters:
             Decimal("2.00") <= self.tp2_cap_rr <= Decimal("3.00")
         ):
             raise ValueError("tp2_cap_rr must remain between 2.00 and 3.00 when enabled")
+        if not Decimal("0.90") <= self.profit_lock_activation_r <= Decimal("1.10"):
+            raise ValueError("profit_lock_activation_r must remain between 0.90 and 1.10")
+        if not Decimal("0.75") <= self.profit_lock_gap_r <= Decimal("1.25"):
+            raise ValueError("profit_lock_gap_r must remain between 0.75 and 1.25")
 
     def to_dict(self) -> dict[str, str | None]:
         self.validate()
@@ -49,6 +56,8 @@ class StrategyParameters:
             "min_rr_tp1": str(self.min_rr_tp1),
             "min_rr_tp2": str(self.min_rr_tp2),
             "tp2_cap_rr": str(self.tp2_cap_rr) if self.tp2_cap_rr is not None else None,
+            "profit_lock_activation_r": str(self.profit_lock_activation_r),
+            "profit_lock_gap_r": str(self.profit_lock_gap_r),
         }
 
     @classmethod
@@ -72,6 +81,8 @@ class StrategyParameters:
             tp2_cap_rr=(
                 Decimal(str(cap_raw)) if cap_raw is not None and cap_raw != "" else None
             ),
+            profit_lock_activation_r=dec("profit_lock_activation_r", "1.00"),
+            profit_lock_gap_r=dec("profit_lock_gap_r", "1.00"),
         )
         result.validate()
         return result
