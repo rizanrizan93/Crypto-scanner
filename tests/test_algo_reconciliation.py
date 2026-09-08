@@ -9,7 +9,12 @@ from crypto_scanner.binance.private_rest import AlgoOrderSnapshot, BinancePrivat
 
 
 class DelayedReader:
-    def __init__(self, failures: int, *, message: str = "Binance private API error code=-2013 msg=Order does not exist.") -> None:
+    def __init__(
+        self,
+        failures: int,
+        *,
+        message: str = "Binance private API error code=-2013 msg=Order does not exist.",
+    ) -> None:
         self.failures = failures
         self.message = message
         self.calls = 0
