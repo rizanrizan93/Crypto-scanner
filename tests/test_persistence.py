@@ -18,6 +18,8 @@ from crypto_scanner.persistence import (
 from crypto_scanner.trajectory import TrajectoryMetrics, TrajectoryQuality
 from crypto_scanner.trajectory_store import TrajectoryRecord, TrajectoryState
 
+SIGNAL_ID = "sig-0123456789abcdef0123456789abcdef"
+
 
 def _record(state: TrajectoryState = TrajectoryState.OPEN) -> TrajectoryRecord:
     metrics = TrajectoryMetrics(
@@ -44,9 +46,10 @@ def _record(state: TrajectoryState = TrajectoryState.OPEN) -> TrajectoryRecord:
         return TrajectoryRecord(
             snapshot=metrics,
             state=state,
-            calibration_eligible=False,
+            calibration_eligible=True,
             persistence_mode="SUPABASE",
             note="closed",
+            signal_id=SIGNAL_ID,
             realized_pnl=Decimal("0.04"),
             commission=Decimal("0.001"),
             funding_fee=Decimal("-0.0002"),
@@ -149,6 +152,7 @@ def test_supabase_store_upserts_position_trajectory_and_closed_trade() -> None:
     combined = "".join(str(payload) for _, payload in calls)
     assert '"1.415"' in combined
     assert '"CLOSED"' in combined
+    assert SIGNAL_ID in combined
     assert "top-secret-key" not in combined
 
 
