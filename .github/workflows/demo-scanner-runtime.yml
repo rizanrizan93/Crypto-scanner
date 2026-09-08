@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           total_cycles=11
+          profit_lock_tick_seconds=60
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             total_cycles=1
           fi
@@ -73,12 +74,29 @@ jobs:
             echo "=== Demo acquisition cycle ${cycle}/${total_cycles} ==="
             crypto-scanner-lifecycle-maintenance
             crypto-scanner-cycle
+
+            # The managed scanner injects the same serialized profit-lock tick after
+            # each 60s Fast Watch sleep. This immediate tick closes the timing gap when
+            # acquisition returns early or just opened a new position.
+            crypto-scanner-profit-lock-watch
             crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
 
             if [ "${cycle}" -lt "${total_cycles}" ]; then
               cycle_finished=$(date +%s)
               elapsed=$((cycle_finished - cycle_started))
               remaining=$((300 - elapsed))
+
+              # Keep position management at ~1 minute during the otherwise idle part
+              # of the 5-minute acquisition window. Calls are serialized in this job;
+              # no second exchange writer runs concurrently with acquisition.
+              while [ "${remaining}" -gt "${profit_lock_tick_seconds}" ]; do
+                sleep "${profit_lock_tick_seconds}"
+                crypto-scanner-profit-lock-watch
+                cycle_finished=$(date +%s)
+                elapsed=$((cycle_finished - cycle_started))
+                remaining=$((300 - elapsed))
+              done
+
               if [ "${remaining}" -gt 0 ]; then
                 sleep "${remaining}"
               fi
