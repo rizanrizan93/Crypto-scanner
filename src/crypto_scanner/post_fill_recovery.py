@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from crypto_scanner.binance.models import PositionSnapshot
+from crypto_scanner.binance.models import OrderSnapshot, PositionSnapshot
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient, UserTradeFill
 from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
 from crypto_scanner.execution_plan import EntryOrderPlan
@@ -20,6 +20,7 @@ from crypto_scanner.position_manager_write import (
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _RECOVERABLE_ORDER_STATUSES = (
+    "PENDING_RECONCILIATION",
     "FILLED_PROTECTION_FAILED",
     "FILLED_PROTECTION_UNKNOWN",
 )
@@ -119,7 +120,9 @@ def _load_recoverable_plan(
         side="Buy" if side_raw == "BUY" else "Sell",
         qty=_decimal(row.get("qty"), "qty"),
         entry_price=_decimal(
-            geometry.get("entry_price") if geometry.get("entry_price") is not None else row.get("price"),
+            geometry.get("entry_price")
+            if geometry.get("entry_price") is not None
+            else row.get("price"),
             "entry_price",
         ),
         stop_loss=_decimal(geometry.get("stop_loss"), "stop_loss"),
@@ -135,7 +138,7 @@ def _load_recoverable_plan(
 def _entry_fills(
     reader: BinanceDemoPrivateReadOnlyClient,
     plan: EntryOrderPlan,
-) -> tuple[object, tuple[UserTradeFill, ...], Decimal]:
+) -> tuple[OrderSnapshot, tuple[UserTradeFill, ...], Decimal]:
     order = reader.get_order_by_client_id(plan.symbol, plan.order_link_id)
     filled_qty = order.cum_exec_qty or Decimal(0)
     if order.order_status != "FILLED" or filled_qty <= 0:
@@ -163,12 +166,13 @@ def _entry_fills(
 
 
 def _persist_recovered_linkage(
-    reader: BinanceDemoPrivateReadOnlyClient,
     linkage: DurableTradeLinkage,
     plan: EntryOrderPlan,
     position: PositionSnapshot,
+    order: OrderSnapshot,
+    fills: tuple[UserTradeFill, ...],
+    average_entry: Decimal,
 ) -> None:
-    order, fills, average_entry = _entry_fills(reader, plan)
     for fill in fills:
         linkage.save_fill(fill, client_order_id=plan.order_link_id)
     linkage.save_open_position(
@@ -194,11 +198,12 @@ def recover_post_fill_failures(
     linkage: DurableTradeLinkage,
     persistence_config: SupabasePersistenceConfig,
 ) -> PostFillRecoveryResult:
-    """Repair only scanner fills whose durable order says protection failed/unknown.
+    """Repair only scanner fills with durable pending/failed protection evidence.
 
-    The repair is intentionally narrow: an open position must match the durable entry
-    side and signal geometry. Missing SL/TP is repaired with the existing no-unprotected-
-    window replacement protocol. Any unsafe/ambiguous protector state remains blocking.
+    A PENDING_RECONCILIATION row is never assumed filled. Before any protector write,
+    Binance must prove that exact deterministic entry order is FILLED and its user-trade
+    fills must reconcile to the executed quantity. Unsafe or ambiguous protector states
+    remain blocking.
     """
     if not persistence_config.enabled:
         raise PostFillRecoveryError("post-fill recovery requires dedicated Supabase")
@@ -219,6 +224,9 @@ def recover_post_fill_failures(
                 raise PostFillRecoveryError(
                     f"durable entry side {expected_side} mismatches exchange {position.side}"
                 )
+
+            # Authoritative proof of the exact fill must precede every recovery write.
+            order, fills, average_entry = _entry_fills(reader, plan)
 
             active = reader.get_open_algo_orders(symbol)
             report = audit_symbol_protection(symbol, positions, active)
@@ -252,7 +260,14 @@ def recover_post_fill_failures(
                 raise PostFillRecoveryError(
                     f"post-fill recovery final protection audit failed: {final_report.status.value}"
                 )
-            _persist_recovered_linkage(reader, linkage, plan, refreshed_positions[0])
+            _persist_recovered_linkage(
+                linkage,
+                plan,
+                refreshed_positions[0],
+                order,
+                fills,
+                average_entry,
+            )
             recovered_linkage.append(symbol)
         except (PersistenceError, PositionManagerError, PostFillRecoveryError, RuntimeError) as exc:
             blockers.append(f"POST_FILL_RECOVERY:{symbol}:{type(exc).__name__}:{exc}")
