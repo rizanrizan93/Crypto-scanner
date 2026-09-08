@@ -319,9 +319,30 @@ class SupabaseTrajectoryStore:
                     )
                 )
 
+        closed_positions = tuple(
+            row
+            for row in positions.values()
+            if row.get("state") == TrajectoryState.CLOSED.value
+        )
+        open_positions = tuple(
+            row
+            for row in positions.values()
+            if row.get("state") == TrajectoryState.OPEN.value
+        )
+        if len(closed_positions) + len(open_positions) != len(positions):
+            raise PersistenceError("position persistence contains an invalid trajectory state")
+
+        # A symbol may close and reopen between trajectory cycles. The schema intentionally
+        # permits only one OPEN row per (venue, environment, symbol), so the old episode must
+        # be transitioned to CLOSED before the next episode is inserted as OPEN.
         self._rest.upsert(
             "positions",
-            tuple(positions.values()),
+            closed_positions,
+            on_conflict=("position_id",),
+        )
+        self._rest.upsert(
+            "positions",
+            open_positions,
             on_conflict=("position_id",),
         )
         self._rest.upsert(
