@@ -294,6 +294,7 @@ class SupabaseTrajectoryStore:
                         {
                             "trade_key": position_id,
                             "position_id": position_id,
+                            "signal_id": record.signal_id,
                             "symbol": snapshot.symbol,
                             "direction": snapshot.direction,
                             "entry_time_ms": snapshot.entry_time_ms,
