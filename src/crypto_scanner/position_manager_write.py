@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from crypto_scanner.algo_reconciliation import get_algo_order_eventually
 from crypto_scanner.binance.private_rest import (
     AlgoOrderSnapshot,
     BinanceDemoPrivateReadOnlyClient,
@@ -48,7 +49,7 @@ def _verify_active(
     reader: BinanceDemoPrivateReadOnlyClient,
     expected: ConditionalExitPlan,
 ) -> AlgoOrderSnapshot:
-    actual = reader.get_algo_order_by_client_id(expected.client_algo_id)
+    actual = get_algo_order_eventually(reader, expected.client_algo_id)
     if actual.status.upper() not in _ACTIVE:
         raise PositionManagerError(
             f"protector {expected.client_algo_id} is not active: {actual.status}"

@@ -11,8 +11,11 @@ from crypto_scanner.binance.private_rest import (
 from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.execution_plan import TestnetExecutionArm
+from crypto_scanner.persistence import SupabasePersistenceConfig
 from crypto_scanner.position_manager_write import cleanup_scanner_orphans
+from crypto_scanner.post_fill_recovery import recover_post_fill_failures
 from crypto_scanner.safety import SafetyContract
+from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _ACTIVE_ALGO_STATUSES = frozenset({"NEW", "PENDING", "WORKING"})
 _ALLOWED_ORPHAN_TYPES = frozenset({"STOP_MARKET", "TAKE_PROFIT_MARKET"})
@@ -114,6 +117,11 @@ def main() -> None:
     arm.require_enabled()
     config = load_runtime_config()
     credentials = BinanceDemoCredentials.from_environment()
+    persistence_config = SupabasePersistenceConfig.from_environment()
+    if not persistence_config.enabled:
+        raise LifecycleMaintenanceError(
+            "lifecycle maintenance requires dedicated Crypto Scanner Supabase"
+        )
 
     with (
         BinanceDemoPrivateReadOnlyClient(
@@ -125,11 +133,20 @@ def main() -> None:
             arm,
             base_url=config.binance_rest_url,
         ) as writer,
+        DurableTradeLinkage(persistence_config) as linkage,
     ):
+        recovery = recover_post_fill_failures(
+            reader,
+            writer,
+            linkage,
+            persistence_config,
+        )
         result = run_lifecycle_maintenance(reader, writer, safety=safety)
 
-    print(json.dumps(asdict(result), indent=2, sort_keys=True))
-    if result.blockers:
+    payload = asdict(result)
+    payload["post_fill_recovery"] = asdict(recovery)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if recovery.blockers or result.blockers:
         raise SystemExit(2)
 
 

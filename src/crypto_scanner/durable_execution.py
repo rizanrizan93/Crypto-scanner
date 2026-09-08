@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 
+from crypto_scanner.algo_reconciliation import get_algo_order_eventually
 from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient, UserTradeFill
 from crypto_scanner.binance.private_write import (
@@ -145,7 +146,11 @@ class DurableExecutionCoordinator:
         return fills
 
     def _verify_algo_new(self, ack: AlgoSubmissionAck) -> None:
-        state = self.private.get_algo_order_by_client_id(ack.client_algo_id)
+        state = get_algo_order_eventually(
+            self.private,
+            ack.client_algo_id,
+            sleep=self.sleep,
+        )
         if state.status != "NEW" or not state.reduce_only:
             raise DurableExecutionError(
                 f"conditional protector is not active NEW/reduceOnly: {ack.client_algo_id} "
@@ -268,7 +273,7 @@ class DurableExecutionCoordinator:
         except UnknownSubmissionOutcome:
             self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_UNKNOWN")
             raise
-        except (BinanceOrderSubmissionError, DurableExecutionError):
+        except (BinanceOrderSubmissionError, DurableExecutionError, RuntimeError):
             self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_FAILED")
             raise
 
