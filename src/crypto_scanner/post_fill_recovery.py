@@ -73,21 +73,48 @@ def _load_recoverable_plan(
 ) -> EntryOrderPlan | None:
     status_filter = "in.(" + ",".join(_RECOVERABLE_ORDER_STATUSES) + ")"
     with _RecoveryRestClient(config) as rest:
-        rows = rest.select(
-            "orders",
+        # If durable OPEN linkage already exists for this symbol, bind recovery to that
+        # exact signal. A stale recoverable order from an older episode of the same symbol
+        # must never be allowed to repair/protect/persist the current exchange position.
+        open_rows = rest.select(
+            "positions",
             params={
-                "select": (
-                    "client_order_id,signal_id,symbol,side,status,qty,price,raw,"
-                    "updated_at_ms"
-                ),
+                "select": "position_id,signal_id",
+                "venue": "eq.BINANCE",
+                "environment": "eq.DEMO",
                 "symbol": f"eq.{symbol.upper()}",
-                "order_type": "eq.MARKET",
-                "reduce_only": "eq.false",
-                "status": status_filter,
-                "order": "updated_at_ms.desc",
-                "limit": "1",
+                "state": "eq.OPEN",
+                "limit": "2",
             },
         )
+        if len(open_rows) > 1:
+            raise PostFillRecoveryError(
+                "multiple durable OPEN position rows exist for recovery symbol"
+            )
+        active_signal_id: str | None = None
+        if open_rows:
+            active_signal_id = str(open_rows[0].get("signal_id") or "")
+            if not active_signal_id.startswith("sig-"):
+                raise PostFillRecoveryError(
+                    "durable OPEN position lacks scanner signal identity"
+                )
+
+        order_params = {
+            "select": (
+                "client_order_id,signal_id,symbol,side,status,qty,price,raw,"
+                "updated_at_ms"
+            ),
+            "symbol": f"eq.{symbol.upper()}",
+            "order_type": "eq.MARKET",
+            "reduce_only": "eq.false",
+            "status": status_filter,
+            "order": "updated_at_ms.desc",
+            "limit": "1",
+        }
+        if active_signal_id is not None:
+            order_params["signal_id"] = f"eq.{active_signal_id}"
+
+        rows = rest.select("orders", params=order_params)
         if not rows:
             return None
         row = rows[0]
@@ -96,6 +123,10 @@ def _load_recoverable_plan(
         side_raw = str(row.get("side") or "").upper()
         if not signal_id.startswith("sig-") or not client_order_id.startswith("cs-"):
             raise PostFillRecoveryError("recoverable order lacks scanner durable identity")
+        if active_signal_id is not None and signal_id != active_signal_id:
+            raise PostFillRecoveryError(
+                "recoverable order signal does not match durable OPEN position signal"
+            )
         if side_raw not in {"BUY", "SELL"}:
             raise PostFillRecoveryError("recoverable order side is invalid")
         geometry_rows = rest.select(
