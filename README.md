@@ -1,167 +1,83 @@
 # Crypto Scanner
 
-Independent 24/7 crypto market scanner and automated trading research system.
+Independent Binance Futures Demo scanner, execution-safety engine, and trading-research system.
 
-## Strict project isolation
+## Runtime boundary
 
-This repository is independent from:
+- Venue: **Binance Futures Demo only** (`https://testnet.binancefuture.com`)
+- Product: USDT perpetual futures
+- Production/LIVE hosts are rejected in code
+- Entry writes are disabled unless `CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED`
+- Scheduled and push workflows observe only; a Demo entry cycle requires an explicit manual dispatch
+- Binance is authoritative for wallet, positions, fills, and active protection
+- A dedicated Crypto Scanner Supabase project is required for managed execution and durable evidence
 
-- Forex Scanner
-- PASTICUAN / Super Scanner
-- EMIR / Cuan-maksimal
-- IDX Flow Scanner
-
-It must not share runtime state, databases, secrets, positions, scoring, calibration, or execution state with those projects. Proven engineering patterns may be reused only as patterns.
+This repository must not share secrets, database state, signals, positions, or calibration data with
+Forex Scanner, IDX Flow Scanner, PASTICUAN, EMIR, or any other project.
 
 ## Safety contract
 
-Current venue and execution scope:
+| Control | Current limit |
+|---|---:|
+| Default planned risk per entry | 0.50% equity |
+| Hard risk ceiling per entry | 1.00% equity |
+| Aggregate planned portfolio risk | 5.00% equity |
+| Logical risk slots | 10 |
+| High-correlation BTC/ETH/SOL slots | 2 |
+| Same-symbol layers | 3, profitable stacking only |
+| Leverage | maximum 3x |
 
-- **Bybit Testnet only**
-- **USDT Perpetual focus**
-- **LIVE trading hard locked**
-- No production Bybit endpoints are accepted by runtime configuration
-- Risk per trade: maximum 1% of account equity
-- Concurrent positions: maximum 3
-- One position per symbol
-- Test phase leverage cap: 3x
-- No martingale
-- No averaging down
-- No grid averaging
-- No doubling after loss
-- Supabase is currently optional/disabled until a dedicated Crypto Scanner database is created
+Martingale, averaging down, grid averaging, and doubling after a loss are prohibited. A fresh
+same-symbol entry is rejected unless it passes the dedicated profitable-stacking transaction.
 
-Initial universe:
+After a market fill, the engine re-reconciles fills and the net position, recalculates actual
+stop-risk using the fill price, and validates SL/TP2 against the current Binance mark price. If
+protection is stale, rejected, or cannot be proven active, a deterministic `reduceOnly` market exit
+is sent once, reconciled by client id, the flat state is verified, and scanner-owned orphan
+protectors are removed. Unknown write outcomes are never blindly retried.
 
-- BTCUSDT
-- ETHUSDT
-- SOLUSDT
-- XRPUSDT
-- BNBUSDT
+## Entry, SL, and TP contract
 
-## Phase 1 public market data
+Discovery ranks candidates from closed-candle 5m, 15m, and 1h evidence. The fast lane then requires
+fresh quote/order-book data, spread and chase limits, directional confirmation, sufficient evidence
+coverage, and fresh structural geometry before a signal becomes `EXECUTION_READY`.
 
-The public Bybit Testnet layer requires no API key and currently provides:
+- Entry: market order only after all hard gates pass.
+- SL: beyond the confirmed invalidation swing plus a bounded ATR/tick buffer.
+- TP1: a durable analytical checkpoint used for geometry and outcome analysis; it is **not** an
+  exchange order yet.
+- TP2: the single full-size exchange-side take-profit paired with the full-size stop.
+- Profit lock: after sufficient MFE, the full-size stop ratchets in bounded 0.50R steps; replacement
+  installs and proves the new stop and TP2 before canceling the old pair.
 
-- exact instrument metadata: tick size, quantity step, minimum order quantity, notional and leverage metadata
-- ticker snapshot: last/mark/index price, best bid/ask, 24h volume/turnover, open interest and funding
-- OHLCV intervals used by the scanner: 1m, 3m, 5m, 15m, 1h and 4h
-- open-interest history
-- funding-rate history
-- WebSocket ticker stream
-- WebSocket public trade stream with taker Buy/Sell side
-- WebSocket orderbook depth 50 with snapshot/delta reconstruction
-- fail-closed local book validation for stale updates and crossed/locked books
+TP1 remains advisory deliberately. Activating a partial TP without event-driven stop resizing could
+temporarily leave the remaining stop quantity larger than the position. The result object therefore
+reports `tp1_execution_mode=ADVISORY_CHECKPOINT` and `tp1_client_algo_id=null` explicitly.
 
-Numeric exchange values are parsed as `Decimal`, not binary floating point, so later sizing and price rounding can use exact exchange metadata.
+## Calibration contract
 
-Public connectivity smoke test:
+Calibration uses only closed trades with a complete durable
+`signal -> geometry -> order -> fill -> position` identity chain and complete trajectory history.
 
-```bash
-crypto-scanner-public-smoke --websocket-seconds 12
-```
+- Fewer than 50 eligible trades: observe only; no parameter mutation.
+- 50–99: bounded adjustment, requiring at least 20 new samples.
+- 100–199: stronger bounded adjustment, requiring at least 30 new samples.
+- 200+: serious calibration, requiring at least 50 new samples.
+- Single-factor attribution: at least 50 total samples and 15 per TRUE/FALSE group.
+- Interaction attribution: at least 100 total samples and 25 per group.
 
-GitHub-hosted runners may execute from a location whose source IP is rejected by Bybit with HTTP 403. The public smoke workflow classifies that specific hosted-runner condition as a diagnostic warning. Other HTTP, schema, WebSocket, data-quality, or orderbook failures remain fatal.
+Risk, leverage, and LIVE locks are never calibration targets. Historical replay and factor
+attribution are research evidence; they do not directly authorize automatic parameter promotion.
 
-A successful GitHub unit/CI run proves the code contract but is not a substitute for venue-connectivity validation from the eventual permitted operational runtime host. The 24/7 scanner/execution engine must run from infrastructure eligible to access Bybit under the account's jurisdiction and Bybit terms; GitHub Actions remains CI/deployment tooling rather than the trading daemon.
+## Main components
 
-## Phase 2 private account reads
-
-Phase 2 is deliberately **read-only by construction**. The private gateway exposes only authenticated GET access to:
-
-- Unified wallet balance
-- USDT linear positions
-- USDT linear open orders
-
-The internal signed-request allowlist contains only these three paths. Unknown private paths are rejected before any network request. There are no create, amend, cancel, leverage-change, or other trading mutation methods in the Phase 2 client.
-
-Authentication follows the Bybit V5 HMAC-SHA256 GET contract using one deterministic query string for both signature generation and transmission. Credentials are loaded only from:
-
-- `BYBIT_TESTNET_API_KEY`
-- `BYBIT_TESTNET_API_SECRET`
-
-The credential dataclass suppresses both values from its representation. Missing credentials fail closed. Production endpoint overrides remain forbidden.
-
-Once credentials are configured on an eligible operational host, the read-only smoke command is:
-
-```bash
-crypto-scanner-private-readonly-smoke
-```
-
-It prints balance, open positions, and open-order state but never prints credentials. Because GitHub-hosted runners can be source-IP blocked by Bybit, authenticated venue validation should be performed by the eventual permitted runtime rather than treated as a GitHub-hosted CI gate.
-
-## Phase 3 technical discovery scanner
-
-Phase 3 is a **ranking/admission layer only**. It cannot create entries, set stop losses, calculate executable position size, submit orders, or mark anything `EXECUTION_READY`.
-
-Discovery currently uses closed-candle evidence from:
-
-- 5m — local tactical structure
-- 15m — primary discovery structure
-- 1h — higher-timeframe confirmation
-
-The analysis engine includes:
-
-- EMA20 / EMA50
-- RSI14
-- ATR14 and ATR expansion
-- ADX14
-- normalized price momentum
-- confirmed swing highs/lows
-- HH/HL and LH/LL structural bias
-- BOS / CHOCH classification
-- regime classification: `TREND`, `RANGE`, `EXPANSION`, `HIGH_VOLATILITY_CHAOTIC`
-- spread
-- funding rate
-- open-interest change
-- optional orderbook imbalance
-- optional taker pressure
-- BTC + ETH directional market-context overlay for altcoins
-
-Missing optional evidence never receives a positive placeholder score. Candidate admission requires directional score separation, acceptable spread, non-chaotic higher-timeframe regime, and minimum evidence coverage. A stale or malformed symbol is quarantined as a scan failure and cannot become a candidate.
-
-Statuses are intentionally limited to:
-
-- `CANDIDATE`
-- `WATCH`
-- `NO_TRADE`
-
-Run the read-only discovery command from an eligible Bybit Testnet-capable host:
-
-```bash
-crypto-scanner-discovery
-```
-
-The command explicitly reports:
-
-```text
-execution_ready = false
-orders_enabled = false
-```
-
-Phase 4 will separately build fresh entry geometry and execution-readiness guards. A high Phase 3 score is therefore never sufficient to trade.
-
-## Planned architecture
-
-1. **Discovery lane** — universe scan, regime/context, ranking, deeper analysis, candidate creation.
-2. **Fast lane** — fresh market revalidation, structure/orderbook validation, entry geometry, execution readiness.
-3. **Position management** — exchange-authoritative position monitoring, structural protection, TP/SL reconciliation, evidence-backed early exit.
-4. **Closed-trade reconciliation** — fills, fees, funding, realized PnL, holding time, outcome.
-5. **Calibration** — staged evidence review by setup, pair, direction, regime, time, MAE/MFE and trajectory.
-6. **Monitoring** — Streamlit is monitoring only; it is never the execution engine.
-
-## Build phases
-
-- Phase 0 — repository skeleton, CI, config safety contract
-- Phase 1 — Bybit Testnet public connectivity, instrument metadata, public market data
-- Phase 2 — private account connectivity, balance/positions/orders read-only
-- Phase 3 — technical discovery scanner
-- Phase 4 — signal geometry and `EXECUTION_READY`
-- Phase 5 — safe Testnet automatic execution
-- Phase 6 — reconciliation and position management
-- Phase 7 — trajectory, MAE/MFE and closed-trade evidence
-- Phase 8 — adaptive calibration
-- Phase 9 — professional monitoring dashboard
+1. Public market layer: instruments, ticker, OHLCV, open interest, funding, trades, and order book.
+2. Discovery lane: regime, trend/structure, momentum, volatility, context, and candidate ranking.
+3. Fast lane: freshness, microstructure, geometry, and final execution readiness.
+4. Durable execution: deterministic identities, sizing, post-fill validation, SL/TP2, emergency exit.
+5. Position management: protection audit, profit lock, stacking recovery, and orphan cleanup.
+6. Evidence: fills, trajectories, MFE/MAE, fees/funding, closed trades, and health events.
+7. Research/calibration: bounded runtime parameters, attribution, and point-in-time historical replay.
 
 ## Local development
 
@@ -175,14 +91,27 @@ ruff check .
 pytest
 ```
 
-No API key is required for Phase 0, Phase 1 public access, or Phase 3 unit tests. Phase 2 unit tests use mocked credentials and never require real secrets.
+Useful read-only/disarmed commands:
+
+```bash
+crypto-scanner-public-smoke
+crypto-scanner-private-readonly-smoke
+crypto-scanner-runtime-preflight
+crypto-scanner-phase6-audit
+crypto-scanner-persistence-smoke
+crypto-scanner-historical-research --help
+```
+
+See [docs/TESTNET_RUNTIME.md](docs/TESTNET_RUNTIME.md) for operational arming and recovery rules and
+[docs/PERSISTENCE.md](docs/PERSISTENCE.md) for the dedicated database contract.
 
 ## Secrets
 
-Never commit secrets. During Phase 2, the only external secrets expected are the two **Bybit Testnet** credentials named above. Do not add LIVE/Mainnet credentials to this repository or its runtime configuration.
+Copy `.env.runtime.example` locally and provide only Demo/dedicated-project credentials:
 
-Supabase secrets are not required while persistence is deferred.
+- `BINANCE_DEMO_API_KEY`
+- `BINANCE_DEMO_API_SECRET`
+- `CRYPTO_SCANNER_SUPABASE_URL`
+- `CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY`
 
-## Database
-
-Bybit remains authoritative for exchange state. A dedicated Supabase project will later be used for durable scanner evidence, trajectories, closed trades, audit history, and calibration. Supabase is not required for Phases 0–3 code development.
+Never commit or print these values. Never place Binance production credentials in this runtime.

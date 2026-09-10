@@ -5,7 +5,12 @@ from decimal import Decimal
 
 from crypto_scanner.binance.models import OrderSnapshot, PositionSnapshot
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient, UserTradeFill
-from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
+from crypto_scanner.binance.private_write import (
+    BinanceOrderSubmissionError,
+    BinanceTestnetOrderClient,
+    validate_exit_triggers_against_mark,
+)
+from crypto_scanner.emergency_exit import flatten_scanner_position
 from crypto_scanner.execution_plan import EntryOrderPlan
 from crypto_scanner.persistence import (
     PersistenceError,
@@ -23,6 +28,7 @@ _RECOVERABLE_ORDER_STATUSES = (
     "PENDING_RECONCILIATION",
     "FILLED_PROTECTION_FAILED",
     "FILLED_PROTECTION_UNKNOWN",
+    "FILLED_PROTECTED_LINKAGE_PENDING",
 )
 
 
@@ -34,6 +40,7 @@ class PostFillRecoveryError(RuntimeError):
 class PostFillRecoveryResult:
     recovered_protection_symbols: tuple[str, ...]
     recovered_linkage_symbols: tuple[str, ...]
+    emergency_flattened_symbols: tuple[str, ...]
     blockers: tuple[str, ...]
 
 
@@ -241,6 +248,7 @@ def recover_post_fill_failures(
 
     recovered_protection: list[str] = []
     recovered_linkage: list[str] = []
+    emergency_flattened: list[str] = []
     blockers: list[str] = []
     positions = tuple(position for position in reader.get_positions() if position.is_open)
 
@@ -262,6 +270,37 @@ def recover_post_fill_failures(
             active = reader.get_open_algo_orders(symbol)
             report = audit_symbol_protection(symbol, positions, active)
             if report.status in {ProtectionStatus.MISSING_STOP, ProtectionStatus.MISSING_TP}:
+                if position.mark_price is None:
+                    raise PostFillRecoveryError(
+                        "recovery requires authoritative mark price before protector write"
+                    )
+                exit_side = "SELL" if position.side == "Buy" else "BUY"
+                try:
+                    validate_exit_triggers_against_mark(
+                        exit_side=exit_side,
+                        stop_loss=plan.stop_loss,
+                        take_profit=plan.take_profit_2,
+                        mark_price=position.mark_price,
+                    )
+                except BinanceOrderSubmissionError:
+                    flatten_scanner_position(
+                        reader,
+                        writer,
+                        symbol=symbol,
+                        management_seed=plan.signal_id,
+                    )
+                    for fill in fills:
+                        linkage.save_fill(fill, client_order_id=plan.order_link_id)
+                    linkage.save_entry_plan(
+                        plan,
+                        status="FILLED_PROTECTION_FAILED_FLATTENED_RECOVERY",
+                        venue_order_id=order.order_id,
+                        avg_price=average_entry,
+                        created_at_ms=order.created_time_ms,
+                        updated_at_ms=order.updated_time_ms,
+                    )
+                    emergency_flattened.append(symbol)
+                    continue
                 replace_aggregate_protection(
                     reader,
                     writer,
@@ -306,5 +345,6 @@ def recover_post_fill_failures(
     return PostFillRecoveryResult(
         recovered_protection_symbols=tuple(recovered_protection),
         recovered_linkage_symbols=tuple(recovered_linkage),
+        emergency_flattened_symbols=tuple(emergency_flattened),
         blockers=tuple(blockers),
     )

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal
 
 from crypto_scanner.algo_reconciliation import get_algo_order_eventually
-from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot
+from crypto_scanner.binance.models import InstrumentInfo, OrderSnapshot, PositionSnapshot
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient, UserTradeFill
 from crypto_scanner.binance.private_write import (
     AlgoSubmissionAck,
@@ -15,8 +15,10 @@ from crypto_scanner.binance.private_write import (
     ProtectionPlan,
     UnknownSubmissionOutcome,
     build_protection_plan,
+    validate_protection_against_mark,
 )
 from crypto_scanner.discovery import TradeDirection
+from crypto_scanner.emergency_exit import EmergencyExitError, flatten_scanner_position
 from crypto_scanner.execution_plan import (
     MAX_AVAILABLE_MARGIN_UTILIZATION,
     EntryOrderPlan,
@@ -49,6 +51,7 @@ class DurableExecutionResult:
     stop_client_algo_id: str
     tp1_client_algo_id: str | None
     tp2_client_algo_id: str
+    tp1_execution_mode: str
 
 
 def _required_leverage(
@@ -130,20 +133,28 @@ class DurableExecutionCoordinator:
             f"entry produced no confirmed fill; status={last.order_status or 'UNKNOWN'}"
         )
 
-    def _entry_fills(self, order: OrderSnapshot) -> tuple[UserTradeFill, ...]:
+    def _entry_fills(
+        self,
+        order: OrderSnapshot,
+        *,
+        attempts: int = 6,
+    ) -> tuple[UserTradeFill, ...]:
         start_ms = max(0, (order.created_time_ms or self.now_ms()) - 60_000)
-        fills = tuple(
-            fill
-            for fill in self.private.get_user_trades(
-                order.symbol,
-                start_time_ms=start_ms,
-                limit=1000,
+        for attempt in range(attempts):
+            fills = tuple(
+                fill
+                for fill in self.private.get_user_trades(
+                    order.symbol,
+                    start_time_ms=start_ms,
+                    limit=1000,
+                )
+                if fill.order_id == order.order_id
             )
-            if fill.order_id == order.order_id
-        )
-        if not fills:
-            raise DurableExecutionError("filled entry could not be reconciled to user-trade fills")
-        return fills
+            if fills:
+                return fills
+            if attempt + 1 < attempts:
+                self.sleep(0.25)
+        raise DurableExecutionError("filled entry could not be reconciled to user-trade fills")
 
     def _verify_algo_new(self, ack: AlgoSubmissionAck) -> None:
         state = get_algo_order_eventually(
@@ -159,15 +170,13 @@ class DurableExecutionCoordinator:
 
     def _install_protection(
         self,
-        plan: EntryOrderPlan,
-        filled_qty: Decimal,
-    ) -> tuple[ProtectionPlan, AlgoSubmissionAck, AlgoSubmissionAck]:
-        protection = build_protection_plan(plan, filled_qty)
+        protection: ProtectionPlan,
+    ) -> tuple[AlgoSubmissionAck, AlgoSubmissionAck]:
         stop_ack = self.writer.submit_stop_loss(protection)
         self._verify_algo_new(stop_ack)
         tp2_ack = self.writer.submit_take_profit(protection)
         self._verify_algo_new(tp2_ack)
-        return protection, stop_ack, tp2_ack
+        return stop_ack, tp2_ack
 
     def _persist_post_fill_failure(
         self,
@@ -184,6 +193,84 @@ class DurableExecutionCoordinator:
             created_at_ms=order.created_time_ms,
             updated_at_ms=self.now_ms(),
         )
+
+    def _single_post_fill_position(
+        self,
+        plan: EntryOrderPlan,
+        filled_qty: Decimal,
+    ) -> PositionSnapshot:
+        positions = tuple(
+            position
+            for position in self.private.get_positions()
+            if position.is_open and position.symbol == plan.symbol
+        )
+        if len(positions) != 1:
+            raise DurableExecutionError(
+                "expected exactly one authoritative open position after fill"
+            )
+        position = positions[0]
+        expected_side = "Buy" if plan.side == "Buy" else "Sell"
+        if position.side != expected_side or position.size != filled_qty:
+            raise DurableExecutionError(
+                "post-fill position side or quantity does not match the entry fill"
+            )
+        return position
+
+    def _validate_actual_fill_risk(
+        self,
+        plan: EntryOrderPlan,
+        *,
+        average_entry_price: Decimal,
+        filled_qty: Decimal,
+        account_equity: Decimal,
+    ) -> None:
+        risk_per_unit = (
+            average_entry_price - plan.stop_loss
+            if plan.side == "Buy"
+            else plan.stop_loss - average_entry_price
+        )
+        if risk_per_unit <= 0:
+            raise DurableExecutionError("post-fill stop is on the wrong side of entry")
+        actual_risk = risk_per_unit * filled_qty
+        slippage_limit = plan.risk_amount * Decimal("1.05")
+        contract_limit = account_equity * Decimal(str(self.safety.max_risk_per_trade))
+        if actual_risk > min(slippage_limit, contract_limit):
+            raise DurableExecutionError(
+                "post-fill slippage increased actual stop risk beyond the allowed budget"
+            )
+
+    def _flatten_after_protection_failure(
+        self,
+        plan: EntryOrderPlan,
+        order: OrderSnapshot,
+        cause: Exception,
+    ) -> None:
+        try:
+            flatten_scanner_position(
+                self.private,
+                self.writer,
+                symbol=plan.symbol,
+                management_seed=plan.signal_id,
+                sleep=self.sleep,
+            )
+        except (EmergencyExitError, RuntimeError) as exit_exc:
+            self._persist_post_fill_failure(
+                plan,
+                order,
+                status="FILLED_PROTECTION_FAILED_EMERGENCY_EXIT_FAILED",
+            )
+            raise DurableExecutionError(
+                "protection failed and emergency exit could not be proven filled"
+            ) from exit_exc
+        self._persist_post_fill_failure(
+            plan,
+            order,
+            status="FILLED_PROTECTION_FAILED_FLATTENED",
+        )
+        raise DurableExecutionError(
+            "post-fill safety validation/protection failed; emergency exit filled "
+            "and flat state verified"
+        ) from cause
 
     def execute(
         self,
@@ -265,40 +352,61 @@ class DurableExecutionCoordinator:
 
         order = self._reconcile_entry(plan)
         filled_qty = order.cum_exec_qty or Decimal(0)
-        if filled_qty <= 0 or filled_qty > plan.qty:
+        if filled_qty <= 0:
             raise DurableExecutionError("reconciled entry quantity is invalid")
+        if filled_qty > plan.qty:
+            self._flatten_after_protection_failure(
+                plan,
+                order,
+                DurableExecutionError("reconciled fill exceeds planned quantity"),
+            )
 
         try:
-            _protection, stop_ack, tp2_ack = self._install_protection(plan, filled_qty)
-        except UnknownSubmissionOutcome:
-            self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_UNKNOWN")
-            raise
-        except (BinanceOrderSubmissionError, DurableExecutionError, RuntimeError):
-            self._persist_post_fill_failure(plan, order, status="FILLED_PROTECTION_FAILED")
-            raise
+            position = self._single_post_fill_position(plan, filled_qty)
+            average_entry_price = order.avg_price or position.avg_price
+            if average_entry_price is None:
+                raise DurableExecutionError("authoritative post-fill entry price is missing")
+            if average_entry_price <= 0:
+                raise DurableExecutionError("reconciled average entry price is invalid")
+            self._validate_actual_fill_risk(
+                plan,
+                average_entry_price=average_entry_price,
+                filled_qty=filled_qty,
+                account_equity=wallet.total_equity or Decimal(0),
+            )
+            if position.mark_price is None:
+                raise DurableExecutionError("authoritative post-fill mark price is missing")
+            protection = build_protection_plan(plan, filled_qty)
+            validate_protection_against_mark(
+                protection,
+                mark_price=position.mark_price,
+                tick_size=instrument.tick_size,
+            )
+            stop_ack, tp2_ack = self._install_protection(protection)
+        except (RuntimeError, ValueError) as exc:
+            self._flatten_after_protection_failure(plan, order, exc)
 
-        fills = self._entry_fills(order)
+        try:
+            fills = self._entry_fills(order)
+            fill_qty = sum((fill.qty for fill in fills), Decimal(0))
+            if fill_qty != filled_qty:
+                raise DurableExecutionError(
+                    f"user-trade fill quantity {fill_qty} does not match "
+                    f"order quantity {filled_qty}"
+                )
+            average_entry_price = order.avg_price or _average_fill_price(fills)
+        except (RuntimeError, ValueError) as exc:
+            self._persist_post_fill_failure(
+                plan,
+                order,
+                status="FILLED_PROTECTED_LINKAGE_PENDING",
+            )
+            raise DurableExecutionError(
+                "exchange protection is active but durable fill linkage is pending"
+            ) from exc
+
         for fill in fills:
             self.linkage.save_fill(fill, client_order_id=plan.order_link_id)
-        fill_qty = sum((fill.qty for fill in fills), Decimal(0))
-        if fill_qty != filled_qty:
-            raise DurableExecutionError(
-                f"user-trade fill quantity {fill_qty} does not match order quantity {filled_qty}"
-            )
-        average_entry_price = order.avg_price or _average_fill_price(fills)
-        if average_entry_price <= 0:
-            raise DurableExecutionError("reconciled average entry price is invalid")
-
-        open_positions = tuple(
-            position
-            for position in self.private.get_positions()
-            if position.is_open and position.symbol == plan.symbol
-        )
-        if len(open_positions) != 1:
-            raise DurableExecutionError(
-                "expected exactly one authoritative open position after fill"
-            )
-        position = open_positions[0]
         entry_time_ms = min(fill.time_ms for fill in fills)
         position_id = self.linkage.save_open_position(
             plan=plan,
@@ -358,4 +466,5 @@ class DurableExecutionCoordinator:
             stop_client_algo_id=stop_ack.client_algo_id,
             tp1_client_algo_id=None,
             tp2_client_algo_id=tp2_ack.client_algo_id,
+            tp1_execution_mode="ADVISORY_CHECKPOINT",
         )

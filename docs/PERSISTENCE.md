@@ -25,7 +25,10 @@ Configure both values together:
 
 Never commit or print the service-role key. Do not reuse a key from any IDX or Forex project.
 
-If neither variable exists, Phase 7 remains usable with the optional JSON diagnostic sink. If only one variable exists, runtime fails closed as a configuration error.
+Managed scanning, execution, recovery, and calibration require both variables. A standalone Phase 7
+diagnostic can still write an optional local JSON artifact, but that is not a substitute for durable
+managed-runtime persistence. If only one variable exists, runtime fails closed as a configuration
+error.
 
 ## Persistence behavior
 
@@ -45,7 +48,11 @@ Before any write, runtime verifies the `schema_meta.schema_version` row. A misma
 
 ## Calibration guard
 
-Connecting Supabase does not by itself make a trajectory calibration-eligible. Phase 7 keeps `calibration_eligible=false` until the automated execution path durably links the original signal and its initial stop to the position. This prevents reconstructed or remembered stop values from being used as R-multiple evidence.
+Connecting Supabase does not by itself make a trajectory calibration-eligible. Phase 7 keeps
+`calibration_eligible=false` until the automated execution path durably links the original signal
+and its initial stop to the position. This prevents reconstructed or remembered stop values from
+being used as R-multiple evidence. Parameter changes remain disabled below 50 complete eligible
+trades; factor interactions require at least 100 samples and balanced groups.
 
 ## Smoke check
 

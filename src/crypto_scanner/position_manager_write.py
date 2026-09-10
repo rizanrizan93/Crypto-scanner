@@ -16,6 +16,7 @@ from crypto_scanner.binance.private_write import (
     SplitProtectionPlan,
     UnknownSubmissionOutcome,
     deterministic_management_id,
+    validate_exit_triggers_against_mark,
 )
 from crypto_scanner.position_manager import ProtectionStatus, audit_symbol_protection
 
@@ -275,6 +276,14 @@ def replace_aggregate_protection(
         raise PositionManagerError("replacement triggers must be positive")
 
     exit_side = "SELL" if position.side == "Buy" else "BUY"
+    if position.mark_price is None:
+        raise PositionManagerError("aggregate replacement requires authoritative mark price")
+    validate_exit_triggers_against_mark(
+        exit_side=exit_side,
+        stop_loss=stop_trigger,
+        take_profit=tp2_trigger,
+        mark_price=position.mark_price,
+    )
     _assert_replaceable_existing(reader, symbol, exit_side)
     stop_id = deterministic_management_id(symbol, management_seed, "slr")
     tp2_id = deterministic_management_id(symbol, management_seed, "tp2r")

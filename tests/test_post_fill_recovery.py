@@ -124,13 +124,38 @@ class FakeReader:
         *,
         entry_status: str = "FILLED",
         executed: Decimal = Decimal("39499"),
+        mark_price: Decimal = Decimal("0.299"),
     ) -> None:
         self.entry_status = entry_status
         self.executed = executed
         self.repaired = False
+        self.mark_price = mark_price
+        self.flattened = False
 
     def get_positions(self) -> tuple[PositionSnapshot, ...]:
-        return (_position(),)
+        if self.flattened:
+            return ()
+        position = _position()
+        return (
+            PositionSnapshot(
+                symbol=position.symbol,
+                side=position.side,
+                size=position.size,
+                avg_price=position.avg_price,
+                position_value=position.position_value,
+                leverage=position.leverage,
+                mark_price=self.mark_price,
+                liq_price=position.liq_price,
+                unrealised_pnl=position.unrealised_pnl,
+                cum_realised_pnl=position.cum_realised_pnl,
+                position_im=position.position_im,
+                position_mm=position.position_mm,
+                take_profit=position.take_profit,
+                stop_loss=position.stop_loss,
+                trailing_stop=position.trailing_stop,
+                updated_time_ms=position.updated_time_ms,
+            ),
+        )
 
     def get_order_by_client_id(self, symbol: str, client_order_id: str) -> OrderSnapshot:
         assert symbol == "TRXUSDT"
@@ -203,6 +228,7 @@ def test_pending_row_is_recovered_only_after_authoritative_fill_proof(
     assert result.blockers == ()
     assert result.recovered_protection_symbols == ("TRXUSDT",)
     assert result.recovered_linkage_symbols == ("TRXUSDT",)
+    assert result.emergency_flattened_symbols == ()
     assert replacement_calls == [
         ("TRXUSDT", Decimal("0.302"), Decimal("0.296"), SIGNAL_ID)
     ]
@@ -239,7 +265,47 @@ def test_unfilled_pending_row_never_reaches_protector_write(
     assert replacement_called is False
     assert result.recovered_protection_symbols == ()
     assert result.recovered_linkage_symbols == ()
+    assert result.emergency_flattened_symbols == ()
     assert len(result.blockers) == 1
     assert "not authoritatively FILLED" in result.blockers[0]
     assert linkage.fills == []
     assert not linkage.position_saved
+
+
+def test_stale_recovery_triggers_flatten_instead_of_resubmitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = FakeReader(mark_price=Decimal("0.303"))
+    linkage = FakeLinkage()
+    replacement_called = False
+
+    monkeypatch.setattr(
+        "crypto_scanner.post_fill_recovery._load_recoverable_plan",
+        lambda _config, _symbol: _plan(),
+    )
+
+    def replace(*_args, **_kwargs):
+        nonlocal replacement_called
+        replacement_called = True
+
+    def flatten(_reader, _writer, *, symbol, management_seed):
+        assert symbol == "TRXUSDT"
+        assert management_seed == SIGNAL_ID
+        reader.flattened = True
+        return object()
+
+    monkeypatch.setattr(
+        "crypto_scanner.post_fill_recovery.replace_aggregate_protection",
+        replace,
+    )
+    monkeypatch.setattr(
+        "crypto_scanner.post_fill_recovery.flatten_scanner_position",
+        flatten,
+    )
+
+    result = recover_post_fill_failures(reader, object(), linkage, _config())
+
+    assert replacement_called is False
+    assert result.blockers == ()
+    assert result.emergency_flattened_symbols == ("TRXUSDT",)
+    assert linkage.statuses == ["FILLED_PROTECTION_FAILED_FLATTENED_RECOVERY"]

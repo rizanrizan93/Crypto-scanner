@@ -1,55 +1,88 @@
-# Bybit Testnet Operational Runtime
+# Binance Futures Demo operational runtime
 
 This document applies only to the independent Crypto Scanner project.
 
-## Runtime boundary
+## Hard boundary
 
-GitHub-hosted Actions remains CI/CD only. The 24/7 scanner and execution process must run on an operational host whose network is eligible to access Bybit Testnet.
+The application accepts only Binance Futures Demo URLs. Mainnet/LIVE remains locked in code.
+GitHub Actions is a bounded scanner/maintenance runner, not authorization for production trading.
 
-LIVE/Mainnet remains hard locked by application code. Production Bybit endpoints are rejected.
+Required secrets:
 
-## Required secrets
+- `BINANCE_DEMO_API_KEY`
+- `BINANCE_DEMO_API_SECRET`
+- `CRYPTO_SCANNER_SUPABASE_URL`
+- `CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY`
 
-The operational host requires only the Bybit Testnet credentials at this stage:
+The Supabase credentials must belong to the dedicated Crypto Scanner project. Never reuse another
+project's database or service-role key.
 
-- `BYBIT_TESTNET_API_KEY`
-- `BYBIT_TESTNET_API_SECRET`
+## Disarmed preflight
 
-Never commit either value.
-
-## Mandatory preflight state
-
-Before any Testnet order write:
-
-- `CRYPTO_SCANNER_TESTNET_EXECUTION=DISABLED`
-- public Testnet access must succeed for the configured universe
-- contract metadata and best bid/ask must be valid
-- private UNIFIED wallet read must succeed
-- Testnet equity must be positive
-- positions and open-order reads must succeed
-
-Run:
+Keep `CRYPTO_SCANNER_TESTNET_EXECUTION=DISABLED`, then run:
 
 ```bash
 crypto-scanner-runtime-preflight
+crypto-scanner-persistence-smoke
+crypto-scanner-phase6-audit
 ```
 
-A valid operational host returns `preflight_status: PASS_DISARMED`.
+Preflight must prove Demo endpoint identity, credentials, positive account state, One-way Mode,
+instrument metadata, and durable schema compatibility. It performs no order writes.
 
-The preflight command never creates, amends, or cancels an order.
+## Arming
 
-## Container preflight
+`CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED` permits Demo writes only; all signal, freshness, sizing,
+portfolio-risk, leverage, protection, and reconciliation gates still apply.
 
-Create `.env.runtime` on the host from `.env.runtime.example` and provide the Testnet credentials without committing the file. Keep execution disabled.
+The scheduled `Crypto Scanner Demo Runtime` workflow is disarmed for entry. Manual dispatch exposes
+`enable_demo_orders`; setting it to true permits exactly one scanner cycle. Lifecycle maintenance
+remains serialized and armed so it can repair protection, ratchet stops, close an unrecoverably
+unprotected scanner position, and remove scanner-owned orphans.
 
-```bash
-docker compose run --rm crypto-scanner-preflight
-```
+Before manually arming, require all of the following:
 
-The container runs as a non-root user, uses a read-only filesystem in Compose, and defaults Testnet execution to disabled.
+1. CI and disarmed public/private/persistence preflight pass.
+2. Phase 6 reports no unsafe or ambiguous open position.
+3. No unresolved post-fill or stack transaction blocker exists.
+4. The current calibration report is reviewed; a small sample is not evidence of edge.
+5. The operator accepts that Binance Demo orders—not LIVE orders—may be created.
 
-## Arming boundary
+## Post-fill protection and recovery
 
-`CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED` is permitted only after the operational host has passed the disarmed public/private preflight. Enabling it does not bypass signal geometry, freshness, risk sizing, position-count, concentration, exchange metadata, or reconciliation guards.
+Entry ACK is not a fill. The coordinator reconciles the deterministic entry id and user trades,
+checks exact net-position side/quantity, validates actual fill risk, then compares planned SL/TP2
+with current `MARK_PRICE` using a two-tick/one-basis-point safety gap.
 
-The first real Testnet order must use the smallest valid risk-sized quantity produced by the engine, carry server-side stop protection, and be reconciled by deterministic `orderLinkId`. A submission acknowledgement is not treated as a fill. Unknown transport outcome must be reconciled before any further submit attempt.
+The required exchange state is exactly one full-size `reduceOnly` STOP_MARKET and one full-size
+`reduceOnly` TAKE_PROFIT_MARKET (TP2). TP1 is an advisory analytical checkpoint, not an order.
+
+If trigger validation or protector submission fails:
+
+1. submit one deterministic full-size `reduceOnly` market exit;
+2. reconcile that exact client id, including unknown transport outcomes;
+3. verify Binance reports the symbol flat;
+4. cancel only scanner-owned (`cs-`) orphan conditional orders;
+5. persist a `...FLATTENED` failure status.
+
+If the emergency exit cannot be proven filled, runtime fails with
+`FILLED_PROTECTION_FAILED_EMERGENCY_EXIT_FAILED`; this is an operator blocker and must not be retried
+blindly.
+
+## TP1/TP2 policy
+
+Partial TP1 execution is intentionally disabled until an event-driven partial-fill handler can
+resize the stop immediately and audit the new quantity. This avoids an over-sized reduce-only stop
+between TP1 fill and a later polling cycle. TP2 and SL therefore protect the full remaining position.
+
+## Incident checklist
+
+When a runtime job fails:
+
+1. leave automatic entry disarmed;
+2. inspect the order status and deterministic client ids in durable storage;
+3. inspect Binance position plus open algo orders using read-only commands;
+4. run lifecycle maintenance once only when the identity chain is unambiguous;
+5. confirm flat/protected state with Phase 6 audit before any new manual entry cycle.
+
+Never solve an unknown write result by submitting a second order with a new identity.

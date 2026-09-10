@@ -59,7 +59,7 @@ def _sample(index: int, *, taker_aligned: bool, return_bps: str) -> ResearchTrad
     )
 
 
-def test_factor_ranking_stays_observe_only_below_20_samples() -> None:
+def test_factor_ranking_stays_observe_only_below_50_samples() -> None:
     samples = tuple(_sample(i, taker_aligned=i < 5, return_bps="10") for i in range(10))
     report = analyze_factor_attribution(samples)
 
@@ -70,8 +70,8 @@ def test_factor_ranking_stays_observe_only_below_20_samples() -> None:
 
 def test_taker_flow_can_rank_after_minimum_evidence() -> None:
     samples = tuple(
-        _sample(i, taker_aligned=i < 10, return_bps="20" if i < 10 else "-10")
-        for i in range(20)
+        _sample(i, taker_aligned=i < 25, return_bps="20" if i < 25 else "-10")
+        for i in range(50)
     )
     report = analyze_factor_attribution(samples)
 
@@ -87,14 +87,14 @@ def test_taker_flow_can_rank_after_minimum_evidence() -> None:
     interaction = report["factors"]["orderflow_both_aligned"]
     assert interaction["kind"] == "INTERACTION"
     assert interaction["rank_eligible"] is False
-    assert interaction["minimum_samples_for_ranking"] == 50
-    assert interaction["minimum_group_samples"] == 10
+    assert interaction["minimum_samples_for_ranking"] == 100
+    assert interaction["minimum_group_samples"] == 25
 
 
-def test_interaction_factor_requires_50_samples_and_balanced_groups() -> None:
+def test_interaction_factor_requires_100_samples_and_balanced_groups() -> None:
     samples = tuple(
-        _sample(i, taker_aligned=i < 25, return_bps="20" if i < 25 else "-10")
-        for i in range(50)
+        _sample(i, taker_aligned=i < 50, return_bps="20" if i < 50 else "-10")
+        for i in range(100)
     )
     report = analyze_factor_attribution(samples)
 
@@ -108,8 +108,8 @@ def test_interaction_factor_requires_50_samples_and_balanced_groups() -> None:
 
 def test_negative_delta_is_labeled_adverse_not_supportive() -> None:
     samples = tuple(
-        _sample(i, taker_aligned=i < 10, return_bps="-20" if i < 10 else "10")
-        for i in range(20)
+        _sample(i, taker_aligned=i < 25, return_bps="-20" if i < 25 else "10")
+        for i in range(50)
     )
     report = analyze_factor_attribution(samples)
 

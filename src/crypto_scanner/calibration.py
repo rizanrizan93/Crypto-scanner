@@ -63,19 +63,19 @@ def _round_to_step(value: Decimal, step: Decimal) -> Decimal:
 
 
 def _tier(sample_size: int) -> tuple[str, Decimal, Decimal, int]:
-    if sample_size < 10:
-        return "OBSERVE_ONLY", Decimal(0), Decimal(0), 0
-    if sample_size < 20:
-        return "MICRO_ADJUST", Decimal("0.02"), Decimal("0.01"), 5
+    # Small Demo samples are descriptive only. Parameter mutation starts at 50
+    # complete, eligible trades and then requires materially new evidence.
     if sample_size < 50:
-        return "BOUNDED_ADJUST", Decimal("0.03"), Decimal("0.015"), 10
+        return "OBSERVE_ONLY", Decimal(0), Decimal(0), 0
     if sample_size < 100:
-        return "STRONGER_BOUNDED", Decimal("0.04"), Decimal("0.02"), 15
-    return "SERIOUS_CALIBRATION", Decimal("0.05"), Decimal("0.02"), 20
+        return "BOUNDED_ADJUST", Decimal("0.02"), Decimal("0.01"), 20
+    if sample_size < 200:
+        return "STRONGER_BOUNDED", Decimal("0.03"), Decimal("0.015"), 30
+    return "SERIOUS_CALIBRATION", Decimal("0.04"), Decimal("0.02"), 50
 
 
 def _profit_lock_adjustment_step(tier: str) -> Decimal:
-    if tier in {"MICRO_ADJUST", "BOUNDED_ADJUST"}:
+    if tier == "BOUNDED_ADJUST":
         return Decimal("0.05")
     if tier in {"STRONGER_BOUNDED", "SERIOUS_CALIBRATION"}:
         return Decimal("0.10")
@@ -139,7 +139,7 @@ def propose_parameters(
     tier, chase_step, stop_step, minimum_new = _tier(metrics.sample_size)
     reasons: list[str] = []
 
-    if metrics.sample_size < 10:
+    if metrics.sample_size < 50:
         return CalibrationProposal(
             tier=tier,
             metrics=metrics,
