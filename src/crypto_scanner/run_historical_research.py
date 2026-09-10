@@ -40,7 +40,10 @@ def chronological_split(
 
 def _summary_dict(trades: tuple[HistoricalResearchTrade, ...]) -> dict[str, object]:
     summary = summarize_historical_research(trades)
-    return {key: str(value) if isinstance(value, Decimal) else value for key, value in asdict(summary).items()}
+    return {
+        key: str(value) if isinstance(value, Decimal) else value
+        for key, value in asdict(summary).items()
+    }
 
 
 def build_report(
