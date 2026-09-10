@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+
+from crypto_scanner.binance.models import Candle
+from crypto_scanner.technical import atr, ema, validate_candles
+
+
+@dataclass(frozen=True, slots=True)
+class ImpulseRetest:
+    direction: str
+    impulse_index: int
+    retest_index: int
+    impulse_level: Decimal
+    impulse_range_atr: Decimal
+    retest_depth_atr: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayOutcome:
+    direction: str
+    entry_price: Decimal
+    stop_loss: Decimal
+    take_profit: Decimal
+    exit_price: Decimal
+    result_r: Decimal
+    mfe_r: Decimal
+    mae_r: Decimal
+    exit_reason: str
+
+
+def detect_impulse_retest(
+    candles: tuple[Candle, ...],
+    *,
+    impulse_atr: Decimal = Decimal("1.20"),
+    retest_tolerance_atr: Decimal = Decimal("0.30"),
+    max_retest_bars: int = 6,
+) -> ImpulseRetest | None:
+    """Detect a completed impulse followed by a bounded retest without future leakage.
+
+    The final candle is treated as the decision candle. Earlier candles only are used
+    to establish ATR/EMA context and the impulse. A bullish impulse must close above
+    its recent range and EMA20; bearish is symmetric. The later retest must revisit
+    the broken level within tolerance and close back on the impulse side.
+    """
+    validate_candles(candles, min_count=40)
+    if max_retest_bars < 1:
+        raise ValueError("max_retest_bars must be positive")
+
+    decision = len(candles) - 1
+    start = max(20, decision - max_retest_bars)
+    for impulse_idx in range(decision - 1, start - 1, -1):
+        history = candles[: impulse_idx + 1]
+        atr14 = atr(history, 14)
+        if atr14 <= 0:
+            continue
+        impulse = candles[impulse_idx]
+        body = abs(impulse.close - impulse.open)
+        if body < atr14 * impulse_atr:
+            continue
+
+        closes = tuple(c.close for c in history)
+        ema20 = ema(closes, 20)
+        recent = candles[max(0, impulse_idx - 8) : impulse_idx]
+        if not recent:
+            continue
+
+        bullish_level = max(c.high for c in recent)
+        bearish_level = min(c.low for c in recent)
+        tolerance = atr14 * retest_tolerance_atr
+        retest = candles[decision]
+
+        bullish_impulse = impulse.close > bullish_level and impulse.close > ema20
+        if bullish_impulse:
+            touched = retest.low <= bullish_level + tolerance
+            held = retest.close >= bullish_level and retest.close > retest.open
+            if touched and held:
+                return ImpulseRetest(
+                    direction="LONG",
+                    impulse_index=impulse_idx,
+                    retest_index=decision,
+                    impulse_level=bullish_level,
+                    impulse_range_atr=body / atr14,
+                    retest_depth_atr=max(Decimal(0), bullish_level - retest.low) / atr14,
+                )
+
+        bearish_impulse = impulse.close < bearish_level and impulse.close < ema20
+        if bearish_impulse:
+            touched = retest.high >= bearish_level - tolerance
+            held = retest.close <= bearish_level and retest.close < retest.open
+            if touched and held:
+                return ImpulseRetest(
+                    direction="SHORT",
+                    impulse_index=impulse_idx,
+                    retest_index=decision,
+                    impulse_level=bearish_level,
+                    impulse_range_atr=body / atr14,
+                    retest_depth_atr=max(Decimal(0), retest.high - bearish_level) / atr14,
+                )
+    return None
+
+
+def replay_fixed_geometry(
+    future_candles: tuple[Candle, ...],
+    *,
+    direction: str,
+    entry_price: Decimal,
+    stop_loss: Decimal,
+    take_profit: Decimal,
+) -> ReplayOutcome:
+    """Evaluate frozen trade geometry on subsequent candles only.
+
+    If SL and TP are both touched in one candle, the conservative SL-first assumption
+    is used. This avoids optimistic intrabar look-ahead in coarse historical candles.
+    """
+    if direction not in {"LONG", "SHORT"}:
+        raise ValueError("direction must be LONG or SHORT")
+    risk = abs(entry_price - stop_loss)
+    if risk <= 0:
+        raise ValueError("initial risk must be positive")
+
+    mfe = Decimal(0)
+    mae = Decimal(0)
+    for candle in future_candles:
+        if direction == "LONG":
+            mfe = max(mfe, (candle.high - entry_price) / risk)
+            mae = max(mae, (entry_price - candle.low) / risk)
+            hit_sl = candle.low <= stop_loss
+            hit_tp = candle.high >= take_profit
+        else:
+            mfe = max(mfe, (entry_price - candle.low) / risk)
+            mae = max(mae, (candle.high - entry_price) / risk)
+            hit_sl = candle.high >= stop_loss
+            hit_tp = candle.low <= take_profit
+
+        if hit_sl:
+            return ReplayOutcome(direction, entry_price, stop_loss, take_profit, stop_loss, Decimal(-1), mfe, mae, "SL")
+        if hit_tp:
+            rr = abs(take_profit - entry_price) / risk
+            return ReplayOutcome(direction, entry_price, stop_loss, take_profit, take_profit, rr, mfe, mae, "TP")
+
+    exit_price = future_candles[-1].close if future_candles else entry_price
+    signed = (exit_price - entry_price) if direction == "LONG" else (entry_price - exit_price)
+    return ReplayOutcome(direction, entry_price, stop_loss, take_profit, exit_price, signed / risk, mfe, mae, "HORIZON")
