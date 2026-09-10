@@ -63,9 +63,9 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run scheduled observation or one manually armed Demo cycle
+      - name: Run auto-gated scheduled or manually armed Demo cycle
         env:
-          CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders && 'ENABLED' || 'DISABLED' }}
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail

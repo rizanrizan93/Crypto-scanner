@@ -30,22 +30,30 @@ crypto-scanner-phase6-audit
 Preflight must prove Demo endpoint identity, credentials, positive account state, One-way Mode,
 instrument metadata, and durable schema compatibility. It performs no order writes.
 
-## Arming
+## Automated strategy gate
 
-`CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED` permits Demo writes only; all signal, freshness, sizing,
-portfolio-risk, leverage, protection, and reconciliation gates still apply.
+`CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED` is necessary but not sufficient for Demo entry writes.
+The strategy runtime independently requires either a `FORWARD_DEMO` challenger or a promoted
+champion. `HISTORICAL_PENDING`, `HISTORICAL_REJECTED`, `QUARANTINED`, and an absent/malformed state
+fail closed. Recovery and position-protection writes remain available even when entries are blocked.
 
-The scheduled `Crypto Scanner Demo Runtime` workflow is disarmed for entry. Manual dispatch exposes
-`enable_demo_orders`; setting it to true permits exactly one scanner cycle. Lifecycle maintenance
-remains serialized and armed so it can repair protection, ratchet stops, close an unrecoverably
-unprotected scanner position, and remove scanner-owned orphans.
+The scheduled workflow sets the Demo write arm, but the state machine independently decides whether
+entry is authorized. This allows automatic forward-Demo collection and champion operation without
+bypassing promotion. Push-triggered jobs stay disarmed. Manual dispatch cannot bypass the strategy
+gate. Lifecycle maintenance remains armed for protection repair and orphan cleanup.
+
+The six-hour calibration job evaluates promotion first, then calibrates only the active champion.
+Historical pass moves a challenger to forward Demo. Later jobs evaluate only closed trades whose
+signal contains that exact `strategy_id`. Promotion requires 30 complete trades over at least 14
+days plus profit-factor, expectancy, drawdown, and safety gates. Weak results roll back; a recorded
+post-fill protection failure quarantines new entries.
 
 Before manually arming, require all of the following:
 
 1. CI and disarmed public/private/persistence preflight pass.
 2. Phase 6 reports no unsafe or ambiguous open position.
 3. No unresolved post-fill or stack transaction blocker exists.
-4. The current calibration report is reviewed; a small sample is not evidence of edge.
+4. Promotion state is `FORWARD_DEMO` or `PROMOTED`; manual dispatch cannot override it.
 5. The operator accepts that Binance Demo orders—not LIVE orders—may be created.
 
 ## Post-fill protection and recovery

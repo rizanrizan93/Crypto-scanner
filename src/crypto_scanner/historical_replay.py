@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from crypto_scanner.binance.models import Candle
+from crypto_scanner.profit_lock import _safe_locked_r, locked_r_from_mfe
+from crypto_scanner.strategy_params import StrategyParameters
 from crypto_scanner.technical import atr, ema, validate_candles
 
 
@@ -179,6 +181,108 @@ def replay_fixed_geometry(
 
     exit_price = future_candles[-1].close if future_candles else entry_price
     signed = (exit_price - entry_price) if direction == "LONG" else (entry_price - exit_price)
+    return ReplayOutcome(
+        direction,
+        entry_price,
+        stop_loss,
+        take_profit,
+        exit_price,
+        signed / risk,
+        mfe,
+        mae,
+        "HORIZON",
+    )
+
+
+def replay_calibrated_geometry(
+    future_candles: tuple[Candle, ...],
+    *,
+    direction: str,
+    entry_price: Decimal,
+    stop_loss: Decimal,
+    take_profit: Decimal,
+    strategy: StrategyParameters,
+) -> ReplayOutcome:
+    """Replay TP2 and production profit-lock without intrabar look-ahead."""
+    strategy.validate()
+    if direction not in {"LONG", "SHORT"}:
+        raise ValueError("direction must be LONG or SHORT")
+    if direction == "LONG" and not stop_loss < entry_price < take_profit:
+        raise ValueError("LONG geometry must satisfy stop < entry < target")
+    if direction == "SHORT" and not stop_loss > entry_price > take_profit:
+        raise ValueError("SHORT geometry must satisfy stop > entry > target")
+    risk = abs(entry_price - stop_loss)
+    active_stop = stop_loss
+    mfe = mae = Decimal(0)
+    for candle in future_candles:
+        if direction == "LONG":
+            hit_sl = candle.low <= active_stop
+            hit_tp = candle.high >= take_profit
+            candle_mfe = (candle.high - entry_price) / risk
+            candle_mae = (entry_price - candle.low) / risk
+        else:
+            hit_sl = candle.high >= active_stop
+            hit_tp = candle.low <= take_profit
+            candle_mfe = (entry_price - candle.low) / risk
+            candle_mae = (candle.high - entry_price) / risk
+        mfe = max(mfe, candle_mfe)
+        mae = max(mae, candle_mae)
+        if hit_sl:
+            result_r = (
+                (active_stop - entry_price) / risk
+                if direction == "LONG"
+                else (entry_price - active_stop) / risk
+            )
+            return ReplayOutcome(
+                direction,
+                entry_price,
+                stop_loss,
+                take_profit,
+                active_stop,
+                result_r,
+                mfe,
+                mae,
+                "SL" if active_stop == stop_loss else "PROFIT_LOCK",
+            )
+        if hit_tp:
+            return ReplayOutcome(
+                direction,
+                entry_price,
+                stop_loss,
+                take_profit,
+                take_profit,
+                abs(take_profit - entry_price) / risk,
+                mfe,
+                mae,
+                "TP",
+            )
+        target_lock = locked_r_from_mfe(mfe, strategy)
+        if target_lock is None:
+            continue
+        current_r = (
+            (candle.close - entry_price) / risk
+            if direction == "LONG"
+            else (entry_price - candle.close) / risk
+        )
+        safe_lock = _safe_locked_r(target_locked_r=target_lock, current_r=current_r)
+        if safe_lock is None:
+            continue
+        proposed = (
+            entry_price + safe_lock * risk
+            if direction == "LONG"
+            else entry_price - safe_lock * risk
+        )
+        active_stop = (
+            max(active_stop, proposed)
+            if direction == "LONG"
+            else min(active_stop, proposed)
+        )
+    exit_price = future_candles[-1].close if future_candles else entry_price
+    signed = (
+        exit_price - entry_price
+        if direction == "LONG"
+        else entry_price - exit_price
+    )
     return ReplayOutcome(
         direction,
         entry_price,

@@ -202,6 +202,9 @@ class DurableTradeLinkage:
         readiness: ReadinessDecision,
         candidate_timestamp_ms: int,
         geometry_created_at_ms: int,
+        strategy_id: str | None = None,
+        promotion_stage: str | None = None,
+        strategy_params: dict[str, str | None] | None = None,
     ) -> str:
         if readiness.status is not ReadinessStatus.EXECUTION_READY or readiness.geometry is None:
             raise PersistenceError("only EXECUTION_READY geometry can become a durable signal")
@@ -239,6 +242,9 @@ class DurableTradeLinkage:
                         "long_score": candidate.long_score,
                         "short_score": candidate.short_score,
                         "evidence_coverage": candidate.evidence_coverage,
+                        "strategy_id": strategy_id,
+                        "promotion_stage": promotion_stage,
+                        "strategy_params": strategy_params,
                     },
                 },
             ),

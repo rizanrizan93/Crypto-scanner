@@ -52,7 +52,15 @@ Connecting Supabase does not by itself make a trajectory calibration-eligible. P
 `calibration_eligible=false` until the automated execution path durably links the original signal
 and its initial stop to the position. This prevents reconstructed or remembered stop values from
 being used as R-multiple evidence. Parameter changes remain disabled below 50 complete eligible
-trades; factor interactions require at least 100 samples and balanced groups.
+trades; factor interactions require at least 100 samples and balanced groups. A proposal is stored
+as a versioned challenger under `strategy_promotion_v1`; it does not overwrite active parameters.
+
+Execution-ready signals persist `strategy_id`, promotion stage, and the exact parameter mapping in
+their JSON evidence. The promotion evaluator joins those versioned signals to geometry and complete
+closed trades, then expresses net PnL against the original planned stop risk. This keeps forward
+Demo samples isolated by strategy version. The state transition and evidence live in durable
+`runtime_state`; the active parameter record is written only when the forward gate promotes a new
+champion.
 
 ## Smoke check
 

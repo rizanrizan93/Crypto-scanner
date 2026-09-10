@@ -66,8 +66,24 @@ Calibration uses only closed trades with a complete durable
 - Single-factor attribution: at least 50 total samples and 15 per TRUE/FALSE group.
 - Interaction attribution: at least 100 total samples and 25 per group.
 
-Risk, leverage, and LIVE locks are never calibration targets. Historical replay and factor
-attribution are research evidence; they do not directly authorize automatic parameter promotion.
+Calibration never mutates the active strategy directly. It queues a versioned challenger, which
+must pass the automated promotion pipeline:
+
+1. Twelve complete months of point-in-time 5m replay over five configured symbols, including an
+   8 bps round-trip friction assumption and conservative SL-first intrabar handling.
+2. At least 200 historical trades, at least 50 OOS trades, OOS profit factor >=1.20,
+   OOS expectancy >=0.10R, drawdown <=10R, three of four positive chronological folds, and two
+   neighboring-parameter robustness checks with profit factor >=1.05.
+3. Forward Binance Futures Demo evidence from at least 30 complete linked trades across at least
+   14 days, profit factor >=1.10, expectancy >=0.05R, drawdown <=6R, and zero protection incidents.
+
+Passing history changes the challenger only to `FORWARD_DEMO`; passing forward evidence promotes
+it to champion automatically. Weak forward evidence rolls back to the prior champion. A protection
+incident quarantines execution. Every signal records its strategy version, promotion stage, and
+exact bounded parameters, so forward evidence cannot be mixed across versions.
+
+Risk, leverage, position limits, and the LIVE lock are never calibration targets. Auto-promotion
+authorizes Binance Futures Demo only; LIVE remains hard-locked in code.
 
 ## Main components
 
@@ -100,6 +116,7 @@ crypto-scanner-runtime-preflight
 crypto-scanner-phase6-audit
 crypto-scanner-persistence-smoke
 crypto-scanner-historical-research --help
+crypto-scanner-strategy-promote
 ```
 
 See [docs/TESTNET_RUNTIME.md](docs/TESTNET_RUNTIME.md) for operational arming and recovery rules and
