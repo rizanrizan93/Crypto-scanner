@@ -39,17 +39,23 @@ def detect_impulse_retest(
 ) -> ImpulseRetest | None:
     """Detect a completed impulse followed by a bounded retest without future leakage.
 
-    The final candle is treated as the decision candle. Earlier candles only are used
-    to establish ATR/EMA context and the impulse. A bullish impulse must close above
-    its recent range and EMA20; bearish is symmetric. The later retest must revisit
-    the broken level within tolerance and close back on the impulse side.
+    The final candle is the decision candle. Context and the impulse use only candles
+    available before that decision. A valid retest may probe the broken level only by
+    the configured ATR tolerance; any earlier post-impulse close through the invalidation
+    boundary cancels the setup.
     """
     validate_candles(candles, min_count=40)
+    if impulse_atr <= 0:
+        raise ValueError("impulse_atr must be positive")
+    if retest_tolerance_atr < 0:
+        raise ValueError("retest_tolerance_atr must be non-negative")
     if max_retest_bars < 1:
         raise ValueError("max_retest_bars must be positive")
 
     decision = len(candles) - 1
     start = max(20, decision - max_retest_bars)
+    retest = candles[decision]
+
     for impulse_idx in range(decision - 1, start - 1, -1):
         history = candles[: impulse_idx + 1]
         atr14 = atr(history, 14)
@@ -69,13 +75,16 @@ def detect_impulse_retest(
         bullish_level = max(c.high for c in recent)
         bearish_level = min(c.low for c in recent)
         tolerance = atr14 * retest_tolerance_atr
-        retest = candles[decision]
+        intervening = candles[impulse_idx + 1 : decision]
 
         bullish_impulse = impulse.close > bullish_level and impulse.close > ema20
         if bullish_impulse:
+            invalidation = bullish_level - tolerance
+            broken_before_decision = any(c.close < invalidation for c in intervening)
             touched = retest.low <= bullish_level + tolerance
+            bounded = retest.low >= invalidation
             held = retest.close >= bullish_level and retest.close > retest.open
-            if touched and held:
+            if not broken_before_decision and touched and bounded and held:
                 return ImpulseRetest(
                     direction="LONG",
                     impulse_index=impulse_idx,
@@ -87,9 +96,12 @@ def detect_impulse_retest(
 
         bearish_impulse = impulse.close < bearish_level and impulse.close < ema20
         if bearish_impulse:
+            invalidation = bearish_level + tolerance
+            broken_before_decision = any(c.close > invalidation for c in intervening)
             touched = retest.high >= bearish_level - tolerance
+            bounded = retest.high <= invalidation
             held = retest.close <= bearish_level and retest.close < retest.open
-            if touched and held:
+            if not broken_before_decision and touched and bounded and held:
                 return ImpulseRetest(
                     direction="SHORT",
                     impulse_index=impulse_idx,
@@ -116,6 +128,11 @@ def replay_fixed_geometry(
     """
     if direction not in {"LONG", "SHORT"}:
         raise ValueError("direction must be LONG or SHORT")
+    if direction == "LONG" and not stop_loss < entry_price < take_profit:
+        raise ValueError("LONG geometry must satisfy stop < entry < target")
+    if direction == "SHORT" and not stop_loss > entry_price > take_profit:
+        raise ValueError("SHORT geometry must satisfy stop > entry > target")
+
     risk = abs(entry_price - stop_loss)
     if risk <= 0:
         raise ValueError("initial risk must be positive")
@@ -135,11 +152,41 @@ def replay_fixed_geometry(
             hit_tp = candle.low <= take_profit
 
         if hit_sl:
-            return ReplayOutcome(direction, entry_price, stop_loss, take_profit, stop_loss, Decimal(-1), mfe, mae, "SL")
+            return ReplayOutcome(
+                direction,
+                entry_price,
+                stop_loss,
+                take_profit,
+                stop_loss,
+                Decimal(-1),
+                mfe,
+                mae,
+                "SL",
+            )
         if hit_tp:
             rr = abs(take_profit - entry_price) / risk
-            return ReplayOutcome(direction, entry_price, stop_loss, take_profit, take_profit, rr, mfe, mae, "TP")
+            return ReplayOutcome(
+                direction,
+                entry_price,
+                stop_loss,
+                take_profit,
+                take_profit,
+                rr,
+                mfe,
+                mae,
+                "TP",
+            )
 
     exit_price = future_candles[-1].close if future_candles else entry_price
     signed = (exit_price - entry_price) if direction == "LONG" else (entry_price - exit_price)
-    return ReplayOutcome(direction, entry_price, stop_loss, take_profit, exit_price, signed / risk, mfe, mae, "HORIZON")
+    return ReplayOutcome(
+        direction,
+        entry_price,
+        stop_loss,
+        take_profit,
+        exit_price,
+        signed / risk,
+        mfe,
+        mae,
+        "HORIZON",
+    )
