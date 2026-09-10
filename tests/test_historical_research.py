@@ -48,8 +48,8 @@ def _series_with_bullish_retest() -> tuple[Candle, ...]:
     rows.append(
         _candle(
             41,
-            str(level + Decimal("2.10")),
-            str(level + Decimal("2.20")),
+            str(level - Decimal("0.02")),
+            str(level + Decimal("0.30")),
             str(level - Decimal("0.05")),
             str(level + Decimal("0.20")),
         )
@@ -89,7 +89,8 @@ def test_research_enters_only_after_decision_candle() -> None:
     assert trades
     first = trades[0]
     assert first.direction == "LONG"
-    assert first.entry_time_ms > first.decision_time_ms
+    assert first.decision_time_ms == candles[41].start_time_ms
+    assert first.entry_time_ms == candles[42].start_time_ms
     assert first.entry_price == candles[42].open
 
 
