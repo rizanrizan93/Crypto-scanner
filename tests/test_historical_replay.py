@@ -56,8 +56,8 @@ def test_detects_bullish_impulse_retest_without_future_data() -> None:
     rows.append(
         _candle(
             41,
-            str(prior_high + Decimal("2.10")),
-            str(prior_high + Decimal("2.20")),
+            str(prior_high - Decimal("0.02")),
+            str(prior_high + Decimal("0.30")),
             str(prior_high - Decimal("0.05")),
             str(prior_high + Decimal("0.20")),
         )
@@ -79,8 +79,8 @@ def test_rejects_retest_that_sweeps_too_deep() -> None:
     rows.append(
         _candle(
             41,
-            str(prior_high + Decimal("2.00")),
-            str(prior_high + Decimal("2.10")),
+            str(prior_high - Decimal("0.02")),
+            str(prior_high + Decimal("0.30")),
             str(prior_high - Decimal("5.00")),
             str(prior_high + Decimal("0.20")),
         )
@@ -109,7 +109,7 @@ def test_rejects_setup_if_level_was_invalidated_before_decision() -> None:
     rows.append(
         _candle(
             42,
-            str(prior_high + Decimal("0.10")),
+            str(prior_high - Decimal("0.02")),
             str(prior_high + Decimal("0.30")),
             str(prior_high - Decimal("0.05")),
             str(prior_high + Decimal("0.20")),
