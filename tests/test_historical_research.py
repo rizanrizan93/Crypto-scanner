@@ -8,12 +8,12 @@ from crypto_scanner.historical_research import (
 )
 
 
-def _candle(i: int, o: str, h: str, l: str, c: str) -> Candle:
+def _candle(i: int, o: str, h: str, low: str, c: str) -> Candle:
     return Candle(
         start_time_ms=i * 60_000,
         open=Decimal(o),
         high=Decimal(h),
-        low=Decimal(l),
+        low=Decimal(low),
         close=Decimal(c),
         volume=Decimal("100"),
         turnover=Decimal("10000"),
