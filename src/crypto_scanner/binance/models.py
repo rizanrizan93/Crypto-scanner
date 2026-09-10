@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-# Temporary compatibility boundary while exchange-neutral models are extracted in the next phase.
-# These immutable Decimal-based structures are exchange-agnostic despite their historical module.
-from crypto_scanner.bybit.models import (
+from crypto_scanner.account_models import (
+    OrderSnapshot,
+    PositionSnapshot,
+    WalletCoin,
+    WalletSnapshot,
+)
+from crypto_scanner.market_models import (
     Candle,
     FundingRatePoint,
     InstrumentInfo,
@@ -10,12 +14,6 @@ from crypto_scanner.bybit.models import (
     TickerSnapshot,
     decimal_optional,
     decimal_required,
-)
-from crypto_scanner.bybit.private_models import (
-    OrderSnapshot,
-    PositionSnapshot,
-    WalletCoin,
-    WalletSnapshot,
 )
 
 __all__ = [

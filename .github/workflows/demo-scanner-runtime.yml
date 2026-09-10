@@ -11,6 +11,12 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      enable_demo_orders:
+        description: "Allow one explicitly requested Binance Demo entry cycle"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,28 +63,28 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run bounded Demo acquisition loop
+      - name: Run auto-gated scheduled or manually armed Demo cycle
         env:
-          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail
           total_cycles=11
           profit_lock_tick_seconds=60
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
             total_cycles=1
           fi
 
           for cycle in $(seq 1 "${total_cycles}"); do
             cycle_started=$(date +%s)
-            echo "=== Demo acquisition cycle ${cycle}/${total_cycles} ==="
-            crypto-scanner-lifecycle-maintenance
+            echo "=== Demo scanner cycle ${cycle}/${total_cycles}; execution=${CRYPTO_SCANNER_TESTNET_EXECUTION} ==="
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-lifecycle-maintenance
             crypto-scanner-cycle
 
             # The managed scanner injects the same serialized profit-lock tick after
             # each 60s Fast Watch sleep. This immediate tick closes the timing gap when
             # acquisition returns early or just opened a new position.
-            crypto-scanner-profit-lock-watch
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
             crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
 
             if [ "${cycle}" -lt "${total_cycles}" ]; then
@@ -91,7 +97,7 @@ jobs:
               # no second exchange writer runs concurrently with acquisition.
               while [ "${remaining}" -gt "${profit_lock_tick_seconds}" ]; do
                 sleep "${profit_lock_tick_seconds}"
-                crypto-scanner-profit-lock-watch
+                CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
                 cycle_finished=$(date +%s)
                 elapsed=$((cycle_finished - cycle_started))
                 remaining=$((300 - elapsed))

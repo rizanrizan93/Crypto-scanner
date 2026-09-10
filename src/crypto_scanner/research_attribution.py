@@ -16,10 +16,10 @@ from crypto_scanner.persistence import (
 )
 
 RESEARCH_STATE_KEY = "research:factor_attribution:v1"
-MIN_ATTRIBUTION_SAMPLES = 20
-MIN_GROUP_SAMPLES = 5
-MIN_INTERACTION_SAMPLES = 50
-MIN_INTERACTION_GROUP_SAMPLES = 10
+MIN_ATTRIBUTION_SAMPLES = 50
+MIN_GROUP_SAMPLES = 15
+MIN_INTERACTION_SAMPLES = 100
+MIN_INTERACTION_GROUP_SAMPLES = 25
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,9 +453,9 @@ def analyze_factor_attribution(
     )
     if len(samples) < MIN_ATTRIBUTION_SAMPLES:
         status = "OBSERVE_ONLY"
-    elif len(samples) < 50:
+    elif len(samples) < MIN_INTERACTION_SAMPLES:
         status = "PRELIMINARY_ATTRIBUTION"
-    elif len(samples) < 100:
+    elif len(samples) < 200:
         status = "STRONGER_ATTRIBUTION"
     else:
         status = "SERIOUS_ATTRIBUTION"
@@ -490,10 +490,10 @@ def analyze_factor_attribution(
             "outcome_primary": "net_return_bps = net_pnl / entry_notional * 10000",
             "outcome_price": "direction-correct entry-to-exit price return in bps",
             "ranking": "absolute true-vs-false difference in mean net return bps",
-            "single_factor_minimum": "20 total / 5 TRUE / 5 FALSE",
-            "interaction_factor_minimum": "50 total / 10 TRUE / 10 FALSE",
+            "single_factor_minimum": "50 total / 15 TRUE / 15 FALSE",
+            "interaction_factor_minimum": "100 total / 25 TRUE / 25 FALSE",
             "hindsight_guard": "only entry-time telemetry tagged with research_schema is used",
-            "no_automatic_strategy_change_below_20_samples": True,
+            "no_automatic_strategy_change_below_50_samples": True,
         },
     }
 

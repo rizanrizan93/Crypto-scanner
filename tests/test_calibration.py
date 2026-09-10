@@ -6,11 +6,11 @@ from crypto_scanner.calibration import CalibrationMetrics, propose_parameters
 from crypto_scanner.strategy_params import StrategyParameters
 
 
-def test_calibration_observes_only_before_ten_eligible_trades() -> None:
+def test_calibration_observes_only_before_fifty_eligible_trades() -> None:
     current = StrategyParameters()
     proposal = propose_parameters(
         CalibrationMetrics(
-            sample_size=9,
+            sample_size=49,
             win_rate=Decimal("0.44"),
             profit_factor=Decimal("0.80"),
             median_mae_r=Decimal("0.95"),
@@ -25,11 +25,11 @@ def test_calibration_observes_only_before_ten_eligible_trades() -> None:
     assert proposal.reasons == ("INSUFFICIENT_ELIGIBLE_TRADES",)
 
 
-def test_micro_calibration_can_tighten_entry_widen_stop_and_cap_distant_tp2() -> None:
+def test_bounded_calibration_can_tighten_entry_widen_stop_and_cap_distant_tp2() -> None:
     current = StrategyParameters()
     proposal = propose_parameters(
         CalibrationMetrics(
-            sample_size=10,
+            sample_size=50,
             win_rate=Decimal("0.40"),
             profit_factor=Decimal("0.75"),
             median_mae_r=Decimal("0.95"),
@@ -40,6 +40,7 @@ def test_micro_calibration_can_tighten_entry_widen_stop_and_cap_distant_tp2() ->
     )
 
     assert proposal.applied is True
+    assert proposal.tier == "BOUNDED_ADJUST"
     assert proposal.after.max_chase_atr == Decimal("0.78")
     assert proposal.after.stop_buffer_atr == Decimal("0.16")
     assert Decimal("2.00") <= proposal.after.tp2_cap_rr <= Decimal("2.40")
@@ -51,14 +52,14 @@ def test_calibration_waits_without_enough_new_evidence() -> None:
     current = StrategyParameters(max_chase_atr=Decimal("0.76"))
     proposal = propose_parameters(
         CalibrationMetrics(
-            sample_size=12,
+            sample_size=65,
             win_rate=Decimal("0.30"),
             profit_factor=Decimal("0.50"),
             median_mae_r=Decimal("0.70"),
             median_mfe_r=Decimal("1.50"),
         ),
         current,
-        previous_reviewed_sample_size=10,
+        previous_reviewed_sample_size=50,
     )
 
     assert proposal.applied is False
@@ -66,18 +67,18 @@ def test_calibration_waits_without_enough_new_evidence() -> None:
     assert proposal.reasons == ("WAITING_FOR_NEW_EVIDENCE",)
 
 
-def test_calibration_can_reconsider_after_five_total_new_micro_samples() -> None:
+def test_calibration_can_reconsider_after_twenty_new_bounded_samples() -> None:
     current = StrategyParameters(max_chase_atr=Decimal("0.76"))
     proposal = propose_parameters(
         CalibrationMetrics(
-            sample_size=15,
+            sample_size=70,
             win_rate=Decimal("0.30"),
             profit_factor=Decimal("0.50"),
             median_mae_r=Decimal("0.70"),
             median_mfe_r=Decimal("1.50"),
         ),
         current,
-        previous_reviewed_sample_size=10,
+        previous_reviewed_sample_size=50,
     )
 
     assert proposal.applied is True

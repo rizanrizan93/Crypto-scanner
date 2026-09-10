@@ -12,7 +12,7 @@ from crypto_scanner.execution_plan import TestnetExecutionArm
 from crypto_scanner.persistence import SupabasePersistenceConfig
 from crypto_scanner.profit_lock import ProfitLockDecision, ProfitLockStatus, run_profit_lock
 from crypto_scanner.safety import SafetyContract
-from crypto_scanner.strategy_params import load_strategy_parameters
+from crypto_scanner.strategy_promotion import load_strategy_runtime
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 
@@ -48,7 +48,7 @@ def run_profit_lock_tick() -> ProfitLockWatchResult:
         raise ProfitLockWatchError(
             "profit-lock watch requires dedicated Crypto Scanner Supabase"
         )
-    strategy = load_strategy_parameters(persistence_config)
+    strategy = load_strategy_runtime(persistence_config).params
 
     with (
         BinanceDemoPrivateReadOnlyClient(

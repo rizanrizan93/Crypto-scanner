@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from statistics import median
 
-from crypto_scanner.bybit.models import Candle
+from crypto_scanner.market_models import Candle
 
 
 class TechnicalDataError(ValueError):

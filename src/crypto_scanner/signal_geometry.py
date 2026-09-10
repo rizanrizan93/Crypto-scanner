@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from enum import StrEnum
 
-from crypto_scanner.bybit.models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
+from crypto_scanner.market_models import Candle, InstrumentInfo, TickerSnapshot
 from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.structure import (
     StructuralBias,
