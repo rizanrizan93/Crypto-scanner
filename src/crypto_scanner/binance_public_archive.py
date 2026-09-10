@@ -120,7 +120,10 @@ def parse_kline_zip(payload: bytes) -> tuple[Candle, ...]:
 
     if not candles:
         raise BinanceArchiveError("kline archive contains no candles")
-    if any(b.start_time_ms <= a.start_time_ms for a, b in zip(candles, candles[1:])):
+    if any(
+        b.start_time_ms <= a.start_time_ms
+        for a, b in zip(candles, candles[1:], strict=False)
+    ):
         raise BinanceArchiveError("kline archive timestamps are not strictly increasing")
     return tuple(candles)
 
@@ -144,7 +147,7 @@ class BinancePublicArchiveClient:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> "BinancePublicArchiveClient":
+    def __enter__(self) -> BinancePublicArchiveClient:
         return self
 
     def __exit__(self, *_: object) -> None:
