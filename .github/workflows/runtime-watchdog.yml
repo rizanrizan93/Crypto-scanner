@@ -1,6 +1,13 @@
 name: Crypto Scanner Runtime Watchdog
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/crypto_scanner/runtime_watchdog.py"
+      - "pyproject.toml"
+      - ".github/workflows/runtime-watchdog.yml"
   schedule:
     - cron: "13,28,43,58 * * * *"
   workflow_dispatch:
