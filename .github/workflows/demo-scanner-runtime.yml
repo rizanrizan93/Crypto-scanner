@@ -63,9 +63,12 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run scheduled observation or manually armed Demo cycle
+      - name: Run promotion-gated Demo cycle
+        # Scheduled runs may request Demo execution, but scanner_cycle independently
+        # requires an authorized FORWARD_DEMO/PROMOTED strategy. UNVALIDATED,
+        # HISTORICAL_REJECTED and QUARANTINED states remain fail-closed.
         env:
-          CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders) && 'ENABLED' || 'DISABLED' }}
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail
