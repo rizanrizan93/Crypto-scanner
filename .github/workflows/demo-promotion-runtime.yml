@@ -1,19 +1,27 @@
-name: Crypto Scanner Demo Calibration Runtime
+name: Crypto Scanner Demo Promotion Runtime
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/crypto_scanner/strategy_params.py"
+      - "src/crypto_scanner/strategy_promotion.py"
+      - "src/crypto_scanner/strategy_promotion_runtime.py"
+      - ".github/workflows/demo-promotion-runtime.yml"
   schedule:
-    - cron: "41 */6 * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: crypto-scanner-demo-runtime-calibration
+  group: crypto-scanner-demo-runtime-promotion
   cancel-in-progress: false
 
 jobs:
-  calibration-cycle:
+  promotion-cycle:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -38,18 +46,14 @@ jobs:
           test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
       - name: Heartbeat running
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE RUNNING
+        run: crypto-scanner-heartbeat PROMOTION_CYCLE RUNNING
       - name: Evaluate historical and forward-Demo promotion gates
         run: crypto-scanner-strategy-promote
-      - name: Calibrate bounded champion parameters
-        run: crypto-scanner-calibrate
-      - name: Analyze research factor attribution
-        run: crypto-scanner-research-attribution
       - name: Heartbeat success
         if: success()
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE SUCCESS
+        run: crypto-scanner-heartbeat PROMOTION_CYCLE SUCCESS
       - name: Heartbeat failed
         if: failure()
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE FAILED
+        run: crypto-scanner-heartbeat PROMOTION_CYCLE FAILED

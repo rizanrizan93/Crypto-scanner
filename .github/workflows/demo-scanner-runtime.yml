@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: crypto-scanner-demo-runtime
+  group: crypto-scanner-demo-runtime-scanner
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          total_cycles=11
+          total_cycles=12
           profit_lock_tick_seconds=60
           if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
             total_cycles=1

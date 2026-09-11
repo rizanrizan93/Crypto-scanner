@@ -36,6 +36,7 @@ crypto-scanner-cycle = "crypto_scanner.managed_scanner_cycle:main"
 crypto-scanner-calibrate = "crypto_scanner.calibration:main"
 crypto-scanner-research-attribution = "crypto_scanner.research_attribution:main"
 crypto-scanner-heartbeat = "crypto_scanner.runtime_health:main"
+crypto-scanner-runtime-watchdog = "crypto_scanner.runtime_watchdog:main"
 crypto-scanner-historical-research = "crypto_scanner.run_historical_research:main"
 crypto-scanner-strategy-promote = "crypto_scanner.strategy_promotion_runtime:main"
 
