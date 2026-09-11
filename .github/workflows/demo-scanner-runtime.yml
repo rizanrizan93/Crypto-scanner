@@ -1,4 +1,5 @@
 name: Crypto Scanner Demo Runtime
+# Emergency close retry uses only the explicitly authorized DOGEUSDT Demo path.
 
 on:
   push:
