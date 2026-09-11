@@ -1,0 +1,56 @@
+name: One-time DOGEUSDT Demo Emergency Close
+
+on:
+  push:
+    branches:
+      - ops/emergency-close-doge-20260911
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crypto-scanner-doge-emergency-close
+  cancel-in-progress: false
+
+jobs:
+  close-doge-demo:
+    if: github.event.head_commit.message == 'Authorize one-time DOGEUSDT Demo emergency close'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
+      BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
+      CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+      CRYPTO_SCANNER_EMERGENCY_SYMBOL: DOGEUSDT
+      CRYPTO_SCANNER_EMERGENCY_CONFIRM: CLOSE_DOGEUSDT_DEMO
+    steps:
+      - name: Checkout authorized rescue commit
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install scanner
+        run: python -m pip install --upgrade pip && pip install -e .
+      - name: Verify Demo credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BINANCE_DEMO_API_KEY}"
+          test -n "${BINANCE_DEMO_API_SECRET}"
+      - name: Close and verify DOGEUSDT
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops/emergency-results
+          python ops/emergency_close_doge_demo.py | tee ops/emergency-results/doge-close.json
+      - name: Persist verified result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "crypto-scanner-safety-bot"
+          git config user.email "crypto-scanner-safety-bot@users.noreply.github.com"
+          git add ops/emergency-results/doge-close.json
+          git commit -m "Record verified DOGEUSDT Demo emergency close"
+          git push origin HEAD:ops/emergency-close-doge-20260911
