@@ -1,0 +1,133 @@
+name: Crypto Scanner Demo Runtime Supervisor
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Crypto Scanner Demo Runtime"
+      - "Crypto Scanner Demo Trajectory Runtime"
+      - "Crypto Scanner Demo Calibration Runtime"
+      - "Crypto Scanner Demo Promotion Runtime"
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: crypto-scanner-demo-runtime-supervisor
+  cancel-in-progress: true
+
+jobs:
+  maintain-runtime-windows:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Keep Demo acquisition and evidence runtimes alive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          active_count() {
+            local workflow_file="$1"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?branch=main&per_page=20" \
+              --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length'
+          }
+
+          latest_success_epoch() {
+            local workflow_file="$1"
+            local timestamp
+            timestamp="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/runs?branch=main&per_page=20" \
+              --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion == "success")][0].updated_at // "1970-01-01T00:00:00Z"')"
+            date -u -d "${timestamp}" +%s
+          }
+
+          dispatch_plain() {
+            local workflow_file="$1"
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_file}/dispatches" \
+              -f ref=main
+          }
+
+          dispatch_scanner() {
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/demo-scanner-runtime.yml/dispatches" \
+              -f ref=main \
+              -f 'inputs[enable_demo_orders]=true' \
+              -f 'inputs[continuous_window]=true'
+          }
+
+          now_epoch="$(date -u +%s)"
+          support_pending=0
+          scanner_dispatched=0
+
+          if [ "$(active_count demo-scanner-runtime.yml)" -eq 0 ]; then
+            dispatch_scanner
+            scanner_dispatched=1
+            echo "CRYPTO_RUNTIME_SUPERVISOR_DISPATCH component=SCANNER_CYCLE mode=CONTINUOUS_12_CYCLES demo_only=1"
+          else
+            echo "CRYPTO_RUNTIME_SUPERVISOR_BUSY component=SCANNER_CYCLE"
+          fi
+
+          ensure_support_runtime() {
+            local component="$1"
+            local workflow_file="$2"
+            local max_age_seconds="$3"
+            local active
+            local last_success
+            local age
+
+            active="$(active_count "${workflow_file}")"
+            if [ "${active}" -gt 0 ]; then
+              support_pending=1
+              echo "CRYPTO_RUNTIME_SUPERVISOR_BUSY component=${component} active_runs=${active}"
+              return
+            fi
+
+            last_success="$(latest_success_epoch "${workflow_file}")"
+            age=$((now_epoch - last_success))
+            if [ "${age}" -gt "${max_age_seconds}" ]; then
+              dispatch_plain "${workflow_file}"
+              support_pending=1
+              echo "CRYPTO_RUNTIME_SUPERVISOR_DISPATCH component=${component} age_seconds=${age} max_age_seconds=${max_age_seconds}"
+            else
+              echo "CRYPTO_RUNTIME_SUPERVISOR_FRESH component=${component} age_seconds=${age} max_age_seconds=${max_age_seconds}"
+            fi
+          }
+
+          ensure_support_runtime TRAJECTORY_CYCLE demo-trajectory-runtime.yml 1800
+          ensure_support_runtime CALIBRATION_CYCLE demo-calibration-runtime.yml 21600
+          ensure_support_runtime PROMOTION_CYCLE demo-promotion-runtime.yml 3600
+
+          if [ "${support_pending}" -eq 0 ] && [ "${scanner_dispatched}" -eq 0 ]; then
+            if [ "$(active_count runtime-watchdog.yml)" -eq 0 ]; then
+              dispatch_plain runtime-watchdog.yml
+              echo "CRYPTO_RUNTIME_SUPERVISOR_DISPATCH component=WATCHDOG_CYCLE fail_closed=1"
+            else
+              echo "CRYPTO_RUNTIME_SUPERVISOR_BUSY component=WATCHDOG_CYCLE"
+            fi
+          else
+            echo "CRYPTO_RUNTIME_SUPERVISOR_WATCHDOG_DEFER support_pending=${support_pending} scanner_dispatched=${scanner_dispatched}"
+          fi
+
+          echo "CRYPTO_RUNTIME_SUPERVISOR_OK live_trading_locked=1 demo_only=1"
