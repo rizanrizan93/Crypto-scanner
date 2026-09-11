@@ -1,21 +1,21 @@
-name: Crypto Scanner Demo Calibration Runtime
+name: Crypto Scanner Runtime Watchdog
 
 on:
   schedule:
-    - cron: "41 */6 * * *"
+    - cron: "13,28,43,58 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: crypto-scanner-demo-runtime-calibration
+  group: crypto-scanner-demo-runtime-watchdog
   cancel-in-progress: false
 
 jobs:
-  calibration-cycle:
+  watchdog:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     env:
       CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
       CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
@@ -38,18 +38,14 @@ jobs:
           test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
       - name: Heartbeat running
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE RUNNING
-      - name: Evaluate historical and forward-Demo promotion gates
-        run: crypto-scanner-strategy-promote
-      - name: Calibrate bounded champion parameters
-        run: crypto-scanner-calibrate
-      - name: Analyze research factor attribution
-        run: crypto-scanner-research-attribution
+        run: crypto-scanner-heartbeat WATCHDOG_CYCLE RUNNING
+      - name: Require fresh scanner, trajectory, calibration, and promotion runtimes
+        run: crypto-scanner-runtime-watchdog
       - name: Heartbeat success
         if: success()
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE SUCCESS
+        run: crypto-scanner-heartbeat WATCHDOG_CYCLE SUCCESS
       - name: Heartbeat failed
         if: failure()
         continue-on-error: true
-        run: crypto-scanner-heartbeat CALIBRATION_CYCLE FAILED
+        run: crypto-scanner-heartbeat WATCHDOG_CYCLE FAILED
