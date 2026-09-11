@@ -1,0 +1,14 @@
+{
+  "client_order_id": "cs-panic-be7255947fb5579e",
+  "closed_qty": "142869",
+  "environment": "DEMO",
+  "initial_leverage": "3",
+  "initial_side": "Sell",
+  "live_trading_locked": true,
+  "open_algo_orders": 0,
+  "open_regular_orders": 0,
+  "remaining_qty": "0",
+  "status": "CLOSED_AND_VERIFIED_FLAT",
+  "symbol": "DOGEUSDT",
+  "venue_order_id": "2340696209"
+}
