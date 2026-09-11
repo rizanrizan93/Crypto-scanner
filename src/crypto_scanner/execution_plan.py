@@ -4,6 +4,7 @@ import hashlib
 import os
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
+from typing import ClassVar
 
 from crypto_scanner.binance.models import InstrumentInfo, PositionSnapshot, WalletSnapshot
 from crypto_scanner.fast_lane import ReadinessDecision, ReadinessStatus
@@ -20,6 +21,7 @@ _HIGH_CORRELATION_BUCKET = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
 
 @dataclass(frozen=True, slots=True)
 class TestnetExecutionArm:
+    __test__: ClassVar[bool] = False
     enabled: bool
 
     @classmethod

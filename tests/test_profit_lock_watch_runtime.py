@@ -72,3 +72,12 @@ def test_demo_runtime_fills_idle_window_with_serial_one_minute_ticks() -> None:
     assert "crypto-scanner-profit-lock-watch" in workflow
     assert 'while [ "${remaining}" -gt "${profit_lock_tick_seconds}" ]; do' in workflow
     assert 'sleep "${profit_lock_tick_seconds}"' in workflow
+    assert "inputs.enable_demo_orders" in workflow
+    execution_line = next(
+        line
+        for line in workflow.splitlines()
+        if line.strip().startswith("CRYPTO_SCANNER_TESTNET_EXECUTION: ${{")
+    )
+    assert "workflow_dispatch" in execution_line
+    assert "event_name == 'schedule'" in execution_line
+    assert "promotion-gated Demo cycle" in workflow

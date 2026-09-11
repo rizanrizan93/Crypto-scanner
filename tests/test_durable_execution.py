@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -13,6 +14,7 @@ from crypto_scanner.binance.models import (
 from crypto_scanner.binance.private_rest import AlgoOrderSnapshot, UserTradeFill
 from crypto_scanner.binance.private_write import (
     AlgoSubmissionAck,
+    BinanceOrderSubmissionError,
     OrderSubmissionAck,
     SubmissionState,
     UnknownSubmissionOutcome,
@@ -87,7 +89,7 @@ def _wallet() -> WalletSnapshot:
     )
 
 
-def _position() -> PositionSnapshot:
+def _position(*, mark_price: Decimal = Decimal("100.2")) -> PositionSnapshot:
     return PositionSnapshot(
         symbol="BTCUSDT",
         side="Buy",
@@ -95,7 +97,7 @@ def _position() -> PositionSnapshot:
         avg_price=Decimal("100"),
         position_value=Decimal("250"),
         leverage=Decimal("1"),
-        mark_price=Decimal("100.2"),
+        mark_price=mark_price,
         liq_price=None,
         unrealised_pnl=Decimal("0.5"),
         cum_realised_pnl=None,
@@ -154,10 +156,17 @@ def _fill(qty: Decimal = Decimal("2.500")) -> UserTradeFill:
 
 
 class FakePrivate:
-    def __init__(self, *, fill_qty: Decimal = Decimal("2.500")) -> None:
+    def __init__(
+        self,
+        *,
+        fill_qty: Decimal = Decimal("2.500"),
+        mark_price: Decimal = Decimal("100.2"),
+    ) -> None:
         self.position_reads = 0
         self.order_reads = 0
         self.fill_qty = fill_qty
+        self.mark_price = mark_price
+        self.flat = False
 
     def get_position_mode_is_hedged(self) -> bool:
         return False
@@ -167,13 +176,26 @@ class FakePrivate:
 
     def get_positions(self) -> tuple[PositionSnapshot, ...]:
         self.position_reads += 1
-        return () if self.position_reads == 1 else (_position(),)
+        if self.position_reads == 1 or self.flat:
+            return ()
+        return (_position(mark_price=self.mark_price),)
 
     def get_order_by_client_id(self, symbol: str, client_order_id: str) -> OrderSnapshot:
         assert symbol == "BTCUSDT"
-        assert client_order_id.startswith("cs-btcusdt-")
+        assert client_order_id.startswith("cs-")
         self.order_reads += 1
+        if client_order_id.startswith("cs-panic-"):
+            return replace(
+                _order(),
+                order_id="exit-43",
+                order_link_id=client_order_id,
+                side="Sell",
+                reduce_only=True,
+            )
         return _order()
+
+    def get_open_algo_orders(self, symbol: str | None = None) -> tuple[AlgoOrderSnapshot, ...]:
+        return ()
 
     def get_user_trades(self, symbol: str, **_kwargs: object) -> tuple[UserTradeFill, ...]:
         assert symbol == "BTCUSDT"
@@ -198,12 +220,16 @@ class FakeWriter:
     def __init__(
         self,
         *,
+        private: FakePrivate | None = None,
         unknown_entry: bool = False,
         unknown_stop: bool = False,
+        reject_stop: bool = False,
     ) -> None:
         self.calls: list[str] = []
         self.unknown_entry = unknown_entry
         self.unknown_stop = unknown_stop
+        self.reject_stop = reject_stop
+        self.private = private
 
     def set_leverage(self, symbol: str, leverage: int) -> int:
         self.calls.append(f"leverage:{symbol}:{leverage}")
@@ -224,6 +250,10 @@ class FakeWriter:
         self.calls.append("STOP_MARKET")
         if self.unknown_stop:
             raise UnknownSubmissionOutcome(protection.stop_client_algo_id, "unknown stop")
+        if self.reject_stop:
+            raise BinanceOrderSubmissionError(
+                "Binance write rejected code=-2021 msg=Order would immediately trigger."
+            )
         return AlgoSubmissionAck(
             algo_id="algo-stop",
             client_algo_id=protection.stop_client_algo_id,
@@ -238,6 +268,28 @@ class FakeWriter:
             client_algo_id=protection.take_profit_client_algo_id,
             state=SubmissionState.PENDING_RECONCILIATION,
             exchange_time_ms=NOW + 3,
+        )
+
+    def submit_reduce_only_market_exit(
+        self,
+        *,
+        symbol: str,
+        exit_side: str,
+        qty: Decimal,
+        client_order_id: str,
+    ) -> OrderSubmissionAck:
+        self.calls.append("EMERGENCY_EXIT")
+        assert symbol == "BTCUSDT"
+        assert exit_side == "SELL"
+        assert qty == Decimal("2.500")
+        assert client_order_id.startswith("cs-panic-")
+        if self.private is not None:
+            self.private.flat = True
+        return OrderSubmissionAck(
+            order_id="exit-43",
+            client_order_id=client_order_id,
+            state=SubmissionState.PENDING_RECONCILIATION,
+            exchange_time_ms=NOW + 5,
         )
 
 
@@ -266,9 +318,10 @@ def _coordinator(
     writer: FakeWriter | None = None,
     linkage: FakeLinkage | None = None,
 ) -> DurableExecutionCoordinator:
+    selected_private = private or FakePrivate()
     return DurableExecutionCoordinator(
-        private=private or FakePrivate(),
-        writer=writer or FakeWriter(),
+        private=selected_private,
+        writer=writer or FakeWriter(private=selected_private),
         linkage=linkage or FakeLinkage(),
         arm=arm,
         sleep=lambda _seconds: None,
@@ -348,7 +401,7 @@ def test_unknown_entry_outcome_is_persisted_and_never_retried() -> None:
 
 def test_unknown_protection_outcome_is_persisted_after_confirmed_fill() -> None:
     private = FakePrivate()
-    writer = FakeWriter(unknown_stop=True)
+    writer = FakeWriter(private=private, unknown_stop=True)
     linkage = FakeLinkage()
     coordinator = _coordinator(
         arm=TestnetExecutionArm(True),
@@ -357,21 +410,21 @@ def test_unknown_protection_outcome_is_persisted_after_confirmed_fill() -> None:
         linkage=linkage,
     )
 
-    with pytest.raises(UnknownSubmissionOutcome):
+    with pytest.raises(DurableExecutionError, match="emergency exit filled"):
         coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
 
-    assert writer.calls[1:] == ["entry", "STOP_MARKET"]
+    assert writer.calls[1:] == ["entry", "STOP_MARKET", "EMERGENCY_EXIT"]
     assert linkage.order_statuses == [
         "PLANNED",
         "PENDING_RECONCILIATION",
-        "FILLED_PROTECTION_UNKNOWN",
+        "FILLED_PROTECTION_FAILED_FLATTENED",
     ]
     assert not linkage.position_saved
 
 
-def test_fill_quantity_mismatch_fails_before_position_is_marked_durable() -> None:
+def test_fill_linkage_mismatch_keeps_active_protection_and_defers_persistence() -> None:
     private = FakePrivate(fill_qty=Decimal("2.000"))
-    writer = FakeWriter()
+    writer = FakeWriter(private=private)
     linkage = FakeLinkage()
     coordinator = _coordinator(
         arm=TestnetExecutionArm(True),
@@ -380,12 +433,50 @@ def test_fill_quantity_mismatch_fails_before_position_is_marked_durable() -> Non
         linkage=linkage,
     )
 
-    with pytest.raises(DurableExecutionError, match="does not match order quantity"):
+    with pytest.raises(DurableExecutionError, match="durable fill linkage is pending"):
         coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
 
     assert writer.calls[2:] == ["STOP_MARKET", "TAKE_PROFIT_MARKET"]
     assert not linkage.position_saved
-    assert "FILLED_PROTECTED" not in linkage.order_statuses
+    assert linkage.order_statuses[-1] == "FILLED_PROTECTED_LINKAGE_PENDING"
+
+
+def test_binance_immediate_trigger_rejection_is_emergency_flattened() -> None:
+    private = FakePrivate()
+    writer = FakeWriter(private=private, reject_stop=True)
+    linkage = FakeLinkage()
+    coordinator = _coordinator(
+        arm=TestnetExecutionArm(True),
+        private=private,
+        writer=writer,
+        linkage=linkage,
+    )
+
+    with pytest.raises(DurableExecutionError, match="flat state verified"):
+        coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
+
+    assert writer.calls[-2:] == ["STOP_MARKET", "EMERGENCY_EXIT"]
+    assert linkage.order_statuses[-1] == "FILLED_PROTECTION_FAILED_FLATTENED"
+    assert private.flat is True
+
+
+def test_stale_post_fill_trigger_is_rejected_before_algo_submission() -> None:
+    private = FakePrivate(mark_price=Decimal("97.99"))
+    writer = FakeWriter(private=private)
+    linkage = FakeLinkage()
+    coordinator = _coordinator(
+        arm=TestnetExecutionArm(True),
+        private=private,
+        writer=writer,
+        linkage=linkage,
+    )
+
+    with pytest.raises(DurableExecutionError, match="flat state verified"):
+        coordinator.execute(_readiness(), signal_id=SIGNAL_ID, instrument=_instrument())
+
+    assert "STOP_MARKET" not in writer.calls
+    assert writer.calls[-1] == "EMERGENCY_EXIT"
+    assert private.flat is True
 
 
 def test_non_scanner_signal_id_is_rejected_before_exchange_reads() -> None:

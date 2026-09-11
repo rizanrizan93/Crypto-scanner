@@ -5,9 +5,9 @@ from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
 
-from crypto_scanner.bybit.models import Candle, TickerSnapshot
 from crypto_scanner.discovery import DiscoveryResult, DiscoveryStatus, TradeDirection
 from crypto_scanner.fast_lane import ReadinessDecision
+from crypto_scanner.market_models import Candle, TickerSnapshot
 from crypto_scanner.persistence import SupabasePersistenceConfig, SupabaseRestClient
 from crypto_scanner.technical import closed_candles
 

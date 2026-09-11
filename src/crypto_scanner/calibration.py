@@ -14,10 +14,13 @@ from crypto_scanner.persistence import (
     SupabaseRestClient,
 )
 from crypto_scanner.strategy_params import (
-    DEFAULT_STRATEGY_PARAMETERS,
     STRATEGY_CONFIG_VERSION,
-    STRATEGY_STATE_KEY,
     StrategyParameters,
+)
+from crypto_scanner.strategy_promotion import (
+    PromotionStage,
+    queue_strategy_candidate,
+    read_promotion_state,
 )
 
 
@@ -63,19 +66,19 @@ def _round_to_step(value: Decimal, step: Decimal) -> Decimal:
 
 
 def _tier(sample_size: int) -> tuple[str, Decimal, Decimal, int]:
-    if sample_size < 10:
-        return "OBSERVE_ONLY", Decimal(0), Decimal(0), 0
-    if sample_size < 20:
-        return "MICRO_ADJUST", Decimal("0.02"), Decimal("0.01"), 5
+    # Small Demo samples are descriptive only. Parameter mutation starts at 50
+    # complete, eligible trades and then requires materially new evidence.
     if sample_size < 50:
-        return "BOUNDED_ADJUST", Decimal("0.03"), Decimal("0.015"), 10
+        return "OBSERVE_ONLY", Decimal(0), Decimal(0), 0
     if sample_size < 100:
-        return "STRONGER_BOUNDED", Decimal("0.04"), Decimal("0.02"), 15
-    return "SERIOUS_CALIBRATION", Decimal("0.05"), Decimal("0.02"), 20
+        return "BOUNDED_ADJUST", Decimal("0.02"), Decimal("0.01"), 20
+    if sample_size < 200:
+        return "STRONGER_BOUNDED", Decimal("0.03"), Decimal("0.015"), 30
+    return "SERIOUS_CALIBRATION", Decimal("0.04"), Decimal("0.02"), 50
 
 
 def _profit_lock_adjustment_step(tier: str) -> Decimal:
-    if tier in {"MICRO_ADJUST", "BOUNDED_ADJUST"}:
+    if tier == "BOUNDED_ADJUST":
         return Decimal("0.05")
     if tier in {"STRONGER_BOUNDED", "SERIOUS_CALIBRATION"}:
         return Decimal("0.10")
@@ -139,7 +142,7 @@ def propose_parameters(
     tier, chase_step, stop_step, minimum_new = _tier(metrics.sample_size)
     reasons: list[str] = []
 
-    if metrics.sample_size < 10:
+    if metrics.sample_size < 50:
         return CalibrationProposal(
             tier=tier,
             metrics=metrics,
@@ -330,17 +333,58 @@ def _fetch_json_list(
     return payload
 
 
-def _eligible_trade_rows(config: SupabasePersistenceConfig) -> tuple[dict[str, object], ...]:
-    payload = _fetch_json_list(
-        config,
-        "closed_trades",
-        {
-            "select": "trade_key,symbol,direction,net_pnl,mfe_r,mae_r,exit_time_ms",
-            "calibration_eligible": "eq.true",
-            "history_complete": "eq.true",
-            "order": "exit_time_ms.asc",
-            "limit": "1000",
-        },
+def _postgrest_in(values: tuple[str, ...]) -> str:
+    if any(not value.replace("-", "").isalnum() for value in values):
+        raise PersistenceError("calibration signal identity is invalid")
+    return "in.(" + ",".join(values) + ")"
+
+
+def _eligible_trade_rows(
+    config: SupabasePersistenceConfig,
+    *,
+    strategy_id: str,
+) -> tuple[dict[str, object], ...]:
+    signal_ids_list: list[str] = []
+    for offset in range(0, 10_000, 1000):
+        signal_payload = _fetch_json_list(
+            config,
+            "signals",
+            {
+                "select": "signal_id",
+                "evidence->>strategy_id": f"eq.{strategy_id}",
+                "order": "created_at_ms.asc",
+                "limit": "1000",
+                "offset": str(offset),
+            },
+        )
+        for item in signal_payload:
+            if not isinstance(item, dict) or not item.get("signal_id"):
+                raise PersistenceError("calibration strategy signal identity is missing")
+            signal_ids_list.append(str(item["signal_id"]))
+        if len(signal_payload) < 1000:
+            break
+    else:
+        raise PersistenceError("calibration evidence exceeds bounded 10000-row audit window")
+    if len(signal_ids_list) != len(set(signal_ids_list)):
+        raise PersistenceError("calibration evidence contains duplicate signal identities")
+    signal_ids = tuple(signal_ids_list)
+    if not signal_ids:
+        return ()
+    payload = tuple(
+        item
+        for index in range(0, len(signal_ids), 100)
+        for item in _fetch_json_list(
+            config,
+            "closed_trades",
+            {
+                "select": "trade_key,symbol,direction,net_pnl,mfe_r,mae_r,exit_time_ms",
+                "calibration_eligible": "eq.true",
+                "history_complete": "eq.true",
+                "signal_id": _postgrest_in(signal_ids[index : index + 100]),
+                "order": "exit_time_ms.asc",
+                "limit": "100",
+            },
+        )
     )
     rows: list[dict[str, object]] = []
     for item in payload:
@@ -349,34 +393,39 @@ def _eligible_trade_rows(config: SupabasePersistenceConfig) -> tuple[dict[str, o
         if item.get("net_pnl") is None:
             raise PersistenceError("eligible trade is missing net_pnl")
         rows.append(item)
+    rows.sort(key=lambda row: int(row["exit_time_ms"]))
     return tuple(rows)
 
 
-def _read_runtime_state(
+CALIBRATION_REVIEW_STATE_KEY = "strategy_calibration_review_v1"
+
+
+def _read_calibration_review_state(
     config: SupabasePersistenceConfig,
-) -> tuple[StrategyParameters, int, int]:
+) -> tuple[int, int]:
     payload = _fetch_json_list(
         config,
         "runtime_state",
         {
             "select": "state",
-            "state_key": f"eq.{STRATEGY_STATE_KEY}",
+            "state_key": f"eq.{CALIBRATION_REVIEW_STATE_KEY}",
             "limit": "1",
         },
     )
     if not payload:
-        return DEFAULT_STRATEGY_PARAMETERS, 0, 0
+        return 0, 0
     row = payload[0]
     if not isinstance(row, dict) or not isinstance(row.get("state"), dict):
         raise PersistenceError("runtime calibration state is invalid")
     state = row["state"]
     assert isinstance(state, dict)
-    params = StrategyParameters.from_mapping(state)
     reviewed = int(state.get("last_reviewed_sample_size", 0))
-    applied = int(state.get("last_applied_sample_size", 0))
-    if reviewed < 0 or applied < 0 or applied > reviewed:
+    proposed = int(
+        state.get("last_candidate_sample_size", state.get("last_applied_sample_size", 0))
+    )
+    if reviewed < 0 or proposed < 0 or proposed > reviewed:
         raise PersistenceError("runtime calibration sample counters are invalid")
-    return params, reviewed, applied
+    return reviewed, proposed
 
 
 def run_calibration() -> dict[str, object]:
@@ -384,27 +433,63 @@ def run_calibration() -> dict[str, object]:
     if not config.enabled:
         raise PersistenceError("calibration requires dedicated Crypto Scanner Supabase")
 
-    rows = _eligible_trade_rows(config)
+    promotion = read_promotion_state(config)
+    if promotion is None or promotion.champion is None:
+        return {
+            "status": "PASS_CALIBRATION_DEFERRED_NO_CHAMPION",
+            "applied": False,
+            "live_trading_locked": True,
+        }
+    if promotion.stage is PromotionStage.QUARANTINED:
+        return {
+            "status": "PASS_CALIBRATION_DEFERRED_QUARANTINED",
+            "stage": promotion.stage.value,
+            "champion_strategy_id": promotion.champion.strategy_id,
+            "applied": False,
+            "live_trading_locked": True,
+        }
+    if promotion.stage in {PromotionStage.HISTORICAL_PENDING, PromotionStage.FORWARD_DEMO}:
+        return {
+            "status": "PASS_CALIBRATION_DEFERRED_ACTIVE_PROMOTION",
+            "stage": promotion.stage.value,
+            "champion_strategy_id": promotion.champion.strategy_id,
+            "applied": False,
+            "live_trading_locked": True,
+        }
+    rows = _eligible_trade_rows(config, strategy_id=promotion.champion.strategy_id)
     metrics = calculate_metrics(rows)
-    current, previous_reviewed, previous_applied = _read_runtime_state(config)
+    current = promotion.champion.params
+    previous_reviewed, previous_candidate = _read_calibration_review_state(config)
     proposal = propose_parameters(
         metrics,
         current,
-        previous_reviewed_sample_size=previous_applied,
+        previous_reviewed_sample_size=previous_candidate,
     )
     generated_at_ms = _now_ms()
 
-    next_applied_sample = metrics.sample_size if proposal.applied else previous_applied
+    calibration_id = f"cal-global-{generated_at_ms}"
+    candidate_queued = False
+    candidate_strategy_id: str | None = None
+    if proposal.applied:
+        promotion_state, candidate_queued = queue_strategy_candidate(
+            config,
+            proposal.after,
+            source=f"CALIBRATION:{calibration_id}",
+            now_ms=generated_at_ms,
+        )
+        if promotion_state.candidate is not None:
+            candidate_strategy_id = promotion_state.candidate.strategy_id
+    next_candidate_sample = metrics.sample_size if proposal.applied else previous_candidate
     state = {
         "config_version": STRATEGY_CONFIG_VERSION,
-        "params": proposal.after.to_dict(),
+        "champion_strategy_id": promotion.champion.strategy_id,
         "last_reviewed_sample_size": metrics.sample_size,
-        "last_applied_sample_size": next_applied_sample,
+        "last_candidate_sample_size": next_candidate_sample,
         "last_calibration_at_ms": generated_at_ms,
         "tier": proposal.tier,
+        "candidate_strategy_id": candidate_strategy_id,
     }
 
-    calibration_id = f"cal-global-{generated_at_ms}"
     metadata = {
         "tier": proposal.tier,
         "reasons": list(proposal.reasons),
@@ -412,10 +497,14 @@ def run_calibration() -> dict[str, object]:
         "after": proposal.after.to_dict(),
         "minimum_new_samples": proposal.minimum_new_samples,
         "previous_reviewed_sample_size": previous_reviewed,
-        "previous_applied_sample_size": previous_applied,
-        "evidence_baseline_sample_size": previous_applied,
+        "previous_candidate_sample_size": previous_candidate,
+        "evidence_baseline_sample_size": previous_candidate,
+        "candidate_queued": candidate_queued,
+        "candidate_strategy_id": candidate_strategy_id,
+        "active_parameters_unchanged": True,
         "eligible_only": True,
         "history_complete_only": True,
+        "champion_strategy_id": promotion.champion.strategy_id,
         "mfe_ge_1r_count": metrics.mfe_ge_1r_count,
         "mfe_ge_1r_giveback_loss_rate": metrics.mfe_ge_1r_giveback_loss_rate,
         "live_trading_locked": True,
@@ -435,7 +524,7 @@ def run_calibration() -> dict[str, object]:
                     "median_mae_r": metrics.median_mae_r,
                     "median_mfe_r": metrics.median_mfe_r,
                     "profit_factor": metrics.profit_factor,
-                    "applied": proposal.applied,
+                    "applied": False,
                     "config_version": STRATEGY_CONFIG_VERSION,
                     "metadata": metadata,
                 },
@@ -446,7 +535,7 @@ def run_calibration() -> dict[str, object]:
             "runtime_state",
             (
                 {
-                    "state_key": STRATEGY_STATE_KEY,
+                    "state_key": CALIBRATION_REVIEW_STATE_KEY,
                     "version": 1,
                     "state": state,
                     "updated_at_ms": generated_at_ms,
@@ -455,12 +544,19 @@ def run_calibration() -> dict[str, object]:
             on_conflict=("state_key",),
         )
 
-    status = "PASS_CALIBRATION_APPLIED" if proposal.applied else "PASS_CALIBRATION_OBSERVE"
+    status = (
+        "PASS_CALIBRATION_CHALLENGER_QUEUED"
+        if candidate_queued
+        else "PASS_CALIBRATION_OBSERVE"
+    )
     return {
         "status": status,
         "sample_size": metrics.sample_size,
         "tier": proposal.tier,
-        "applied": proposal.applied,
+        "proposed": proposal.applied,
+        "candidate_queued": candidate_queued,
+        "candidate_strategy_id": candidate_strategy_id,
+        "applied": False,
         "reasons": list(proposal.reasons),
         "before": proposal.before.to_dict(),
         "after": proposal.after.to_dict(),
