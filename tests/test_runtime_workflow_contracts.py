@@ -25,6 +25,7 @@ def test_demo_runtime_workflows_have_independent_concurrency_groups() -> None:
             "demo-calibration-runtime.yml",
             "demo-promotion-runtime.yml",
             "runtime-watchdog.yml",
+            "demo-runtime-supervisor.yml",
         )
     )
     groups = tuple(
@@ -48,6 +49,23 @@ def test_scanner_covers_full_hour_and_remains_promotion_gated() -> None:
     assert "total_cycles=11" not in workflow
     assert "promotion-gated Demo cycle" in workflow
     assert "event_name == 'schedule'" in workflow
+    assert "inputs.continuous_window" in workflow
+
+
+def test_supervisor_self_heals_all_runtime_lanes_without_live_unlock() -> None:
+    workflow = _workflow("demo-runtime-supervisor.yml")
+
+    assert "actions: write" in workflow
+    assert 'workflows:' in workflow
+    assert '"Crypto Scanner Demo Runtime"' in workflow
+    assert "demo-scanner-runtime.yml/dispatches" in workflow
+    assert "inputs[enable_demo_orders]=true" in workflow
+    assert "inputs[continuous_window]=true" in workflow
+    assert "ensure_support_runtime TRAJECTORY_CYCLE" in workflow
+    assert "ensure_support_runtime CALIBRATION_CYCLE" in workflow
+    assert "ensure_support_runtime PROMOTION_CYCLE" in workflow
+    assert "runtime-watchdog.yml" in workflow
+    assert "live_trading_locked=1" in workflow
 
 
 def test_promotion_and_watchdog_are_disarmed_and_heartbeat_backed() -> None:

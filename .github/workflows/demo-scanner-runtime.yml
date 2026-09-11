@@ -17,6 +17,11 @@ on:
         required: true
         type: boolean
         default: false
+      continuous_window:
+        description: "Run the managed twelve-cycle acquisition window"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,7 +79,7 @@ jobs:
           set -euo pipefail
           total_cycles=12
           profit_lock_tick_seconds=60
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${{ inputs.continuous_window }}" != "true" ]; then
             total_cycles=1
           fi
 
