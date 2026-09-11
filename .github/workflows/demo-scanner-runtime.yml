@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: crypto-scanner-demo-runtime
@@ -46,18 +46,42 @@ jobs:
           test -n "${BINANCE_DEMO_API_SECRET}"
           test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
           test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Authorized one-time DOGEUSDT Demo emergency close
+        if: github.event_name == 'push' && github.event.head_commit.message == 'Authorize immediate DOGEUSDT Demo emergency close'
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+          CRYPTO_SCANNER_EMERGENCY_SYMBOL: DOGEUSDT
+          CRYPTO_SCANNER_EMERGENCY_CONFIRM: CLOSE_DOGEUSDT_DEMO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops/emergency-results
+          python ops/emergency_close_doge_demo.py | tee ops/emergency-results/doge-close.json
+      - name: Persist verified DOGEUSDT close result
+        if: github.event_name == 'push' && github.event.head_commit.message == 'Authorize immediate DOGEUSDT Demo emergency close'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "crypto-scanner-safety-bot"
+          git config user.email "crypto-scanner-safety-bot@users.noreply.github.com"
+          git add ops/emergency-results/doge-close.json
+          git commit -m "Record verified DOGEUSDT Demo emergency close"
+          git push origin HEAD:main
       - name: Heartbeat running
         continue-on-error: true
         run: crypto-scanner-heartbeat SCANNER_CYCLE RUNNING
       - name: Clean scanner-owned flat-symbol protectors
+        if: github.event_name != 'push' || github.event.head_commit.message != 'Authorize immediate DOGEUSDT Demo emergency close'
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         run: crypto-scanner-lifecycle-maintenance
       - name: Disarmed Phase 6 pre-audit
+        if: github.event_name != 'push' || github.event.head_commit.message != 'Authorize immediate DOGEUSDT Demo emergency close'
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
       - name: Run bounded Demo acquisition loop
+        if: github.event_name != 'push' || github.event.head_commit.message != 'Authorize immediate DOGEUSDT Demo emergency close'
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         shell: bash
