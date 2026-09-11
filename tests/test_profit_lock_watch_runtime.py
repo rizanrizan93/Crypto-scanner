@@ -79,4 +79,5 @@ def test_demo_runtime_fills_idle_window_with_serial_one_minute_ticks() -> None:
         if line.strip().startswith("CRYPTO_SCANNER_TESTNET_EXECUTION: ${{")
     )
     assert "workflow_dispatch" in execution_line
-    assert "event_name == 'schedule'" not in execution_line
+    assert "event_name == 'schedule'" in execution_line
+    assert "promotion-gated Demo cycle" in workflow
