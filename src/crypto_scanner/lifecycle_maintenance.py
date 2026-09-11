@@ -17,7 +17,7 @@ from crypto_scanner.position_manager_write import cleanup_scanner_orphans
 from crypto_scanner.post_fill_recovery import recover_post_fill_failures
 from crypto_scanner.profit_lock import run_profit_lock
 from crypto_scanner.safety import SafetyContract
-from crypto_scanner.strategy_params import load_strategy_parameters
+from crypto_scanner.strategy_promotion import load_strategy_runtime
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _ACTIVE_ALGO_STATUSES = frozenset({"NEW", "PENDING", "WORKING"})
@@ -125,7 +125,7 @@ def main() -> None:
         raise LifecycleMaintenanceError(
             "lifecycle maintenance requires dedicated Crypto Scanner Supabase"
         )
-    strategy = load_strategy_parameters(persistence_config)
+    strategy = load_strategy_runtime(persistence_config).params
 
     with (
         BinanceDemoPrivateReadOnlyClient(

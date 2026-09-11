@@ -5,8 +5,13 @@ from decimal import Decimal
 from statistics import median
 
 from crypto_scanner.binance.models import Candle
-from crypto_scanner.historical_replay import detect_impulse_retest, replay_fixed_geometry
-from crypto_scanner.technical import atr, validate_candles
+from crypto_scanner.historical_replay import (
+    ImpulseRetest,
+    replay_calibrated_geometry,
+    replay_fixed_geometry,
+)
+from crypto_scanner.strategy_params import StrategyParameters
+from crypto_scanner.technical import validate_candles
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +28,7 @@ class HistoricalResearchTrade:
     mfe_r: Decimal
     mae_r: Decimal
     exit_reason: str
+    symbol: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +56,101 @@ def _net_after_round_trip_cost(
     return gross_r - cost_price / risk
 
 
+def _ema20_by_index(candles: tuple[Candle, ...]) -> tuple[Decimal | None, ...]:
+    result: list[Decimal | None] = [None] * len(candles)
+    closes = tuple(candle.close for candle in candles)
+    current = sum(closes[:20], Decimal(0)) / Decimal(20)
+    result[19] = current
+    alpha = Decimal(2) / Decimal(21)
+    for index in range(20, len(closes)):
+        current = closes[index] * alpha + current * (Decimal(1) - alpha)
+        result[index] = current
+    return tuple(result)
+
+
+def _atr14_by_index(candles: tuple[Candle, ...]) -> tuple[Decimal | None, ...]:
+    result: list[Decimal | None] = [None] * len(candles)
+    ranges = tuple(
+        max(
+            current.high - current.low,
+            abs(current.high - previous.close),
+            abs(current.low - previous.close),
+        )
+        for previous, current in zip(candles, candles[1:], strict=False)
+    )
+    current = sum(ranges[:14], Decimal(0)) / Decimal(14)
+    result[14] = current
+    for range_index in range(14, len(ranges)):
+        current = (current * Decimal(13) + ranges[range_index]) / Decimal(14)
+        result[range_index + 1] = current
+    return tuple(result)
+
+
+def _detect_precomputed_impulse_retest(
+    candles: tuple[Candle, ...],
+    *,
+    decision: int,
+    atr14_by_index: tuple[Decimal | None, ...],
+    ema20_by_index: tuple[Decimal | None, ...],
+    impulse_atr: Decimal,
+    retest_tolerance_atr: Decimal,
+    max_retest_bars: int,
+) -> ImpulseRetest | None:
+    start = max(20, decision - max_retest_bars)
+    retest = candles[decision]
+    for impulse_idx in range(decision - 1, start - 1, -1):
+        atr14 = atr14_by_index[impulse_idx]
+        ema20 = ema20_by_index[impulse_idx]
+        if atr14 is None or ema20 is None or atr14 <= 0:
+            continue
+        impulse = candles[impulse_idx]
+        body = abs(impulse.close - impulse.open)
+        if body < atr14 * impulse_atr:
+            continue
+        recent = candles[max(0, impulse_idx - 8) : impulse_idx]
+        bullish_level = max(candle.high for candle in recent)
+        bearish_level = min(candle.low for candle in recent)
+        tolerance = atr14 * retest_tolerance_atr
+        intervening = candles[impulse_idx + 1 : decision]
+        bullish_invalidation = bullish_level - tolerance
+        if (
+            impulse.close > bullish_level
+            and impulse.close > ema20
+            and not any(candle.close < bullish_invalidation for candle in intervening)
+            and retest.low <= bullish_level + tolerance
+            and retest.low >= bullish_invalidation
+            and retest.close >= bullish_level
+            and retest.close > retest.open
+        ):
+            return ImpulseRetest(
+                "LONG",
+                impulse_idx,
+                decision,
+                bullish_level,
+                body / atr14,
+                max(Decimal(0), bullish_level - retest.low) / atr14,
+            )
+        bearish_invalidation = bearish_level + tolerance
+        if (
+            impulse.close < bearish_level
+            and impulse.close < ema20
+            and not any(candle.close > bearish_invalidation for candle in intervening)
+            and retest.high >= bearish_level - tolerance
+            and retest.high <= bearish_invalidation
+            and retest.close <= bearish_level
+            and retest.close < retest.open
+        ):
+            return ImpulseRetest(
+                "SHORT",
+                impulse_idx,
+                decision,
+                bearish_level,
+                body / atr14,
+                max(Decimal(0), retest.high - bearish_level) / atr14,
+            )
+    return None
+
+
 def replay_impulse_retest_research(
     candles: tuple[Candle, ...],
     *,
@@ -60,6 +161,8 @@ def replay_impulse_retest_research(
     retest_tolerance_atr: Decimal = Decimal("0.30"),
     max_retest_bars: int = 6,
     round_trip_cost_bps: Decimal = Decimal("0"),
+    strategy: StrategyParameters | None = None,
+    symbol: str = "",
 ) -> tuple[HistoricalResearchTrade, ...]:
     """Replay impulse-retest signals without contaminating forward Demo evidence.
 
@@ -76,15 +179,23 @@ def replay_impulse_retest_research(
         raise ValueError("target_r must be positive")
     if round_trip_cost_bps < 0:
         raise ValueError("round_trip_cost_bps must be non-negative")
+    if strategy is not None:
+        strategy.validate()
+        stop_buffer_atr = strategy.stop_buffer_atr
+        target_r = strategy.tp2_cap_rr or strategy.min_rr_tp2
 
     trades: list[HistoricalResearchTrade] = []
     used_impulses: set[int] = set()
     latest_decision = len(candles) - horizon_bars - 2
+    atr14_by_index = _atr14_by_index(candles)
+    ema20_by_index = _ema20_by_index(candles)
 
     for decision_idx in range(39, latest_decision + 1):
-        observed = candles[: decision_idx + 1]
-        signal = detect_impulse_retest(
-            observed,
+        signal = _detect_precomputed_impulse_retest(
+            candles,
+            decision=decision_idx,
+            atr14_by_index=atr14_by_index,
+            ema20_by_index=ema20_by_index,
             impulse_atr=impulse_atr,
             retest_tolerance_atr=retest_tolerance_atr,
             max_retest_bars=max_retest_bars,
@@ -92,12 +203,15 @@ def replay_impulse_retest_research(
         if signal is None or signal.impulse_index in used_impulses:
             continue
 
-        atr14 = atr(observed, 14)
-        if atr14 <= 0:
+        atr14 = atr14_by_index[decision_idx]
+        if atr14 is None or atr14 <= 0:
             continue
         decision = candles[decision_idx]
         entry_bar = candles[decision_idx + 1]
         entry = entry_bar.open
+        chase_atr = abs(entry - signal.impulse_level) / atr14
+        if strategy is not None and chase_atr > strategy.max_chase_atr:
+            continue
         buffer = atr14 * stop_buffer_atr
 
         if signal.direction == "LONG":
@@ -116,13 +230,17 @@ def replay_impulse_retest_research(
         future = candles[
             decision_idx + 1 : decision_idx + 1 + horizon_bars
         ]
-        outcome = replay_fixed_geometry(
-            future,
-            direction=signal.direction,
-            entry_price=entry,
-            stop_loss=stop,
-            take_profit=target,
-        )
+        replay = replay_fixed_geometry if strategy is None else replay_calibrated_geometry
+        replay_kwargs = {
+            "direction": signal.direction,
+            "entry_price": entry,
+            "stop_loss": stop,
+            "take_profit": target,
+        }
+        if strategy is None:
+            outcome = replay(future, **replay_kwargs)
+        else:
+            outcome = replay(future, strategy=strategy, **replay_kwargs)
         net_r = _net_after_round_trip_cost(
             outcome.result_r,
             entry_price=entry,
@@ -143,6 +261,7 @@ def replay_impulse_retest_research(
                 mfe_r=outcome.mfe_r,
                 mae_r=outcome.mae_r,
                 exit_reason=outcome.exit_reason,
+                symbol=symbol,
             )
         )
         used_impulses.add(signal.impulse_index)

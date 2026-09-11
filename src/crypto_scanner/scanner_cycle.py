@@ -60,7 +60,7 @@ from crypto_scanner.stack_execution import ProfitableStackCoordinator, StackExec
 from crypto_scanner.stack_recovery import StackRecoveryResult, recover_stack_transactions
 from crypto_scanner.stack_store import DurableStackStore
 from crypto_scanner.stacking import evaluate_stack_admission
-from crypto_scanner.strategy_params import load_strategy_parameters
+from crypto_scanner.strategy_promotion import load_strategy_runtime
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _HIGH_CORRELATION_BUCKET = frozenset({"BTCUSDT", "ETHUSDT", "SOLUSDT"})
@@ -93,6 +93,9 @@ class ScannerCycleResult:
     live_trading_locked: bool
     run_id: str
     execution_armed: bool
+    strategy_id: str
+    promotion_stage: str
+    strategy_execution_authorized: bool
     account_gate: AccountExecutionGate
     discovery_result_count: int
     candidate_count: int
@@ -312,7 +315,9 @@ def run_scanner_cycle() -> ScannerCycleResult:
     persistence_config = SupabasePersistenceConfig.from_environment()
     if not persistence_config.enabled:
         raise ScannerCycleError("scanner cycle requires dedicated Crypto Scanner Supabase")
-    strategy = load_strategy_parameters(persistence_config)
+    strategy_runtime = load_strategy_runtime(persistence_config)
+    strategy = strategy_runtime.params
+    strategy_execution_enabled = arm.enabled and strategy_runtime.execution_authorized
     credentials = BinanceDemoCredentials.from_environment()
 
     micro_failures: list[dict[str, str]] = []
@@ -360,6 +365,10 @@ def run_scanner_cycle() -> ScannerCycleResult:
             safety,
         )
         extra_gate_reasons = list(account_gate.reasons)
+        if arm.enabled and not strategy_runtime.execution_authorized:
+            extra_gate_reasons.append(
+                f"STRATEGY_NOT_PROMOTED:{strategy_runtime.promotion_stage}"
+            )
         if recovery_result.blockers:
             extra_gate_reasons.extend(recovery_result.blockers)
         if risk_slots >= safety.max_concurrent_positions:
@@ -388,7 +397,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
                 micro_failures.append({"symbol": symbol, "detail": str(exc)})
 
         run = DiscoveryPipeline(public, universe=config.universe).run(discovery_micro)
-        run_id = linkage.save_discovery_run(run, execution_armed=arm.enabled)
+        run_id = linkage.save_discovery_run(run, execution_armed=strategy_execution_enabled)
         hot_candidates = select_hot_candidates(run.results)
 
         for candidate in hot_candidates:
@@ -409,7 +418,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
             )
 
         active_hot = list(hot_candidates)
-        max_rounds = FAST_WATCH_MAX_ROUNDS if arm.enabled else 1
+        max_rounds = FAST_WATCH_MAX_ROUNDS if strategy_execution_enabled else 1
         for watch_round in range(1, max_rounds + 1):
             if not active_hot or ready_signals:
                 break
@@ -490,6 +499,9 @@ def run_scanner_cycle() -> ScannerCycleResult:
                             readiness=decision,
                             candidate_timestamp_ms=run.completed_at_ms,
                             geometry_created_at_ms=now_ms,
+                            strategy_id=strategy_runtime.strategy_id,
+                            promotion_stage=strategy_runtime.promotion_stage,
+                            strategy_params=strategy.to_dict(),
                         )
                         ready_signals.append(
                             DurableReadySignal(
@@ -573,7 +585,7 @@ def run_scanner_cycle() -> ScannerCycleResult:
 
         selected: DurableReadySignal | None = None
         selected_is_stack = False
-        if arm.enabled and not account_gate.blocked:
+        if strategy_execution_enabled and not account_gate.blocked:
             for ready in ready_signals:
                 skip = candidate_account_skip_reason(
                     ready.candidate.symbol,
@@ -592,6 +604,14 @@ def run_scanner_cycle() -> ScannerCycleResult:
                     for position in snapshot.open_positions
                 )
                 if same_symbol:
+                    if strategy_runtime.forward_demo_candidate:
+                        execution_skips.append(
+                            {
+                                "symbol": ready.candidate.symbol,
+                                "reason": "FORWARD_DEMO_STACKING_DISABLED",
+                            }
+                        )
+                        continue
                     stack_skip = _stack_skip_reason(
                         ready,
                         snapshot,
@@ -757,7 +777,10 @@ def run_scanner_cycle() -> ScannerCycleResult:
         environment="DEMO",
         live_trading_locked=safety.live_trading_locked,
         run_id=run_id,
-        execution_armed=arm.enabled,
+        execution_armed=strategy_execution_enabled,
+        strategy_id=strategy_runtime.strategy_id,
+        promotion_stage=strategy_runtime.promotion_stage,
+        strategy_execution_authorized=strategy_runtime.execution_authorized,
         account_gate=account_gate,
         discovery_result_count=len(run.results),
         candidate_count=sum(

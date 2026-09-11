@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from crypto_scanner.bybit.models import OrderBookLevel, OrderBookUpdate
+from crypto_scanner.market_models import OrderBookLevel, OrderBookUpdate
 
 
 class OrderBookStateError(RuntimeError):

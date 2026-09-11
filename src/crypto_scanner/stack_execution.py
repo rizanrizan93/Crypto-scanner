@@ -758,4 +758,5 @@ class ProfitableStackCoordinator:
             stop_client_algo_id=final_stop_id,
             tp1_client_algo_id=None,
             tp2_client_algo_id=final_tp2_id,
+            tp1_execution_mode="ADVISORY_CHECKPOINT",
         )

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   calibration-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 45
     env:
       CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
       CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
@@ -39,7 +39,9 @@ jobs:
       - name: Heartbeat running
         continue-on-error: true
         run: crypto-scanner-heartbeat CALIBRATION_CYCLE RUNNING
-      - name: Calibrate bounded strategy parameters
+      - name: Evaluate historical and forward-Demo promotion gates
+        run: crypto-scanner-strategy-promote
+      - name: Calibrate bounded champion parameters
         run: crypto-scanner-calibrate
       - name: Analyze research factor attribution
         run: crypto-scanner-research-attribution

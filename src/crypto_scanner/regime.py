@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from crypto_scanner.bybit.models import Candle
+from crypto_scanner.market_models import Candle
 from crypto_scanner.structure import StructuralBias, StructureState
 from crypto_scanner.technical import adx, atr, atr_expansion_ratio, ema, momentum
 

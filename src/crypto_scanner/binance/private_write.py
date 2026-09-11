@@ -67,6 +67,62 @@ class ProtectionPlan:
     take_profit_client_algo_id: str
 
 
+def validate_exit_triggers_against_mark(
+    *,
+    exit_side: str,
+    stop_loss: Decimal,
+    take_profit: Decimal,
+    mark_price: Decimal,
+    tick_size: Decimal = Decimal(0),
+) -> Decimal:
+    """Validate a STOP/TP pair against the mark used by Binance conditional orders."""
+    if mark_price <= 0 or tick_size < 0:
+        raise BinanceOrderSubmissionError("mark price must be positive and tick size non-negative")
+    if exit_side not in {"BUY", "SELL"}:
+        raise BinanceOrderSubmissionError("protection exit side is invalid")
+
+    minimum_gap = max(tick_size * Decimal(2), mark_price * Decimal("0.0001"))
+    if exit_side == "SELL":
+        stop_safe = stop_loss < mark_price - minimum_gap
+        take_profit_safe = take_profit > mark_price + minimum_gap
+    else:
+        stop_safe = stop_loss > mark_price + minimum_gap
+        take_profit_safe = take_profit < mark_price - minimum_gap
+    if not stop_safe:
+        raise BinanceOrderSubmissionError(
+            "post-fill stop trigger is stale or too close to current mark price"
+        )
+    if not take_profit_safe:
+        raise BinanceOrderSubmissionError(
+            "post-fill take-profit trigger is stale or too close to current mark price"
+        )
+    return minimum_gap
+
+
+def validate_protection_against_mark(
+    protection: ProtectionPlan,
+    *,
+    mark_price: Decimal,
+    tick_size: Decimal,
+) -> Decimal:
+    """Reject conditional exits that Binance could consider immediately triggered.
+
+    Binance evaluates these orders against MARK_PRICE.  A valid structural level can
+    become stale between signal creation and the market fill, so validation must be
+    repeated after the fill with the authoritative position mark.  Two ticks or one
+    basis point (whichever is larger) is reserved as a small propagation buffer.
+    """
+    if tick_size <= 0:
+        raise BinanceOrderSubmissionError("tick size must be positive")
+    return validate_exit_triggers_against_mark(
+        exit_side=protection.exit_side,
+        stop_loss=protection.stop_loss,
+        take_profit=protection.take_profit,
+        mark_price=mark_price,
+        tick_size=tick_size,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ConditionalExitPlan:
     symbol: str
