@@ -10,7 +10,11 @@ from crypto_scanner.calibration import (
     propose_parameters,
     run_calibration,
 )
-from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig, SupabaseRestClient
+from crypto_scanner.persistence import (
+    PersistenceError,
+    SupabasePersistenceConfig,
+    SupabaseRestClient,
+)
 from crypto_scanner.strategy_params import STRATEGY_CONFIG_VERSION
 from crypto_scanner.strategy_promotion import (
     PromotionStage,
