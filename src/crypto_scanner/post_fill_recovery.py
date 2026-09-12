@@ -23,6 +23,7 @@ from crypto_scanner.position_manager_write import (
     replace_aggregate_protection,
 )
 from crypto_scanner.trade_linkage import DurableTradeLinkage
+from crypto_scanner.trajectory import TrajectoryError, infer_open_episode
 
 _RECOVERABLE_ORDER_STATUSES = (
     "PENDING_RECONCILIATION",
@@ -74,19 +75,39 @@ def _decimal(value: object, field: str) -> Decimal:
     return result
 
 
+def _is_phase7_trajectory_position(row: dict[str, object]) -> bool:
+    """Recognize a Phase-7 evidence row that is not authoritative scanner linkage.
+
+    Older Phase-7 rows predate an explicit identity marker, so retain a narrow legacy
+    signature. Any other OPEN row without a scanner signal remains fail-closed.
+    """
+    source = row.get("source")
+    if not isinstance(source, dict):
+        return False
+    if source.get("identity_chain") == "PHASE7_TRAJECTORY_RECONSTRUCTION":
+        return True
+    return bool(
+        source.get("identity_chain") is None
+        and source.get("persistence_mode") == "SUPABASE"
+        and "quality" in source
+        and "history_complete" in source
+    )
+
+
 def _load_recoverable_plan(
     config: SupabasePersistenceConfig,
     symbol: str,
 ) -> EntryOrderPlan | None:
     status_filter = "in.(" + ",".join(_RECOVERABLE_ORDER_STATUSES) + ")"
     with _RecoveryRestClient(config) as rest:
-        # If durable OPEN linkage already exists for this symbol, bind recovery to that
-        # exact signal. A stale recoverable order from an older episode of the same symbol
-        # must never be allowed to repair/protect/persist the current exchange position.
+        # If authoritative durable OPEN linkage already exists for this symbol, bind
+        # recovery to that exact signal. Phase-7 may have created an evidence-only OPEN
+        # row first; that narrow case is allowed to fall back to the recoverable scanner
+        # order, but the exchange episode is proven later before any write is attempted.
         open_rows = rest.select(
             "positions",
             params={
-                "select": "position_id,signal_id",
+                "select": "position_id,signal_id,source",
                 "venue": "eq.BINANCE",
                 "environment": "eq.DEMO",
                 "symbol": f"eq.{symbol.upper()}",
@@ -100,8 +121,14 @@ def _load_recoverable_plan(
             )
         active_signal_id: str | None = None
         if open_rows:
-            active_signal_id = str(open_rows[0].get("signal_id") or "")
-            if not active_signal_id.startswith("sig-"):
+            signal_raw = open_rows[0].get("signal_id")
+            if signal_raw:
+                active_signal_id = str(signal_raw)
+                if not active_signal_id.startswith("sig-"):
+                    raise PostFillRecoveryError(
+                        "durable OPEN position has invalid scanner signal identity"
+                    )
+            elif not _is_phase7_trajectory_position(open_rows[0]):
                 raise PostFillRecoveryError(
                     "durable OPEN position lacks scanner signal identity"
                 )
@@ -203,6 +230,38 @@ def _entry_fills(
     return order, fills, average_entry
 
 
+def _prove_recoverable_order_is_current_episode(
+    reader: BinanceDemoPrivateReadOnlyClient,
+    position: PositionSnapshot,
+    order: OrderSnapshot,
+    fills: tuple[UserTradeFill, ...],
+) -> None:
+    """Require the durable order to be the sole entry order of the live Binance episode."""
+    try:
+        episode = infer_open_episode(
+            position,
+            reader.get_user_trades(position.symbol, limit=1000),
+        )
+    except TrajectoryError as exc:
+        raise PostFillRecoveryError(
+            "current exchange episode cannot be established for linkage recovery"
+        ) from exc
+
+    if episode.layered_entry or len(episode.entry_order_ids) != 1:
+        raise PostFillRecoveryError(
+            "current exchange episode has ambiguous layered entry identity"
+        )
+    if episode.entry_order_ids[0] != order.order_id:
+        raise PostFillRecoveryError(
+            "recoverable order does not match current exchange position episode"
+        )
+    first_fill_ms = min(fill.time_ms for fill in fills)
+    if episode.entry_time_ms != first_fill_ms:
+        raise PostFillRecoveryError(
+            "recoverable order fill time does not match current exchange episode start"
+        )
+
+
 def _persist_recovered_linkage(
     linkage: DurableTradeLinkage,
     plan: EntryOrderPlan,
@@ -238,10 +297,10 @@ def recover_post_fill_failures(
 ) -> PostFillRecoveryResult:
     """Repair only scanner fills with durable pending/failed protection evidence.
 
-    A PENDING_RECONCILIATION row is never assumed filled. Before any protector write,
-    Binance must prove that exact deterministic entry order is FILLED and its user-trade
-    fills must reconcile to the executed quantity. Unsafe or ambiguous protector states
-    remain blocking.
+    A PENDING_RECONCILIATION row is never assumed filled. Before any protector or
+    durable-linkage write, Binance must prove that the exact deterministic entry order is
+    FILLED, its fills reconcile to executed quantity, and that order is the sole entry
+    order of the current flat-to-open exchange episode. Unsafe or ambiguous states block.
     """
     if not persistence_config.enabled:
         raise PostFillRecoveryError("post-fill recovery requires dedicated Supabase")
@@ -264,8 +323,9 @@ def recover_post_fill_failures(
                     f"durable entry side {expected_side} mismatches exchange {position.side}"
                 )
 
-            # Authoritative proof of the exact fill must precede every recovery write.
+            # Authoritative proof of the exact fill and current episode must precede writes.
             order, fills, average_entry = _entry_fills(reader, plan)
+            _prove_recoverable_order_is_current_episode(reader, position, order, fills)
 
             active = reader.get_open_algo_orders(symbol)
             report = audit_symbol_protection(symbol, positions, active)
