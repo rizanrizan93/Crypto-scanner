@@ -68,12 +68,15 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run promotion-gated Demo cycle
-        # Scheduled runs may request Demo execution, but scanner_cycle independently
-        # requires an authorized FORWARD_DEMO/PROMOTED strategy. UNVALIDATED,
-        # HISTORICAL_REJECTED and QUARANTINED states remain fail-closed.
+      - name: Run Demo acquisition and calibration-data cycle
+        # Demo/Testnet is the research data-collection environment. Scheduled and
+        # explicitly armed manual cycles may place Demo orders even while a candidate
+        # is HISTORICAL_PENDING/HISTORICAL_REJECTED. The promotion stage is preserved,
+        # QUARANTINED remains fail-closed, and these research trades receive no
+        # FORWARD_DEMO promotion credit until the historical gate is passed.
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
+          CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +88,7 @@ jobs:
 
           for cycle in $(seq 1 "${total_cycles}"); do
             cycle_started=$(date +%s)
-            echo "=== Demo scanner cycle ${cycle}/${total_cycles}; execution=${CRYPTO_SCANNER_TESTNET_EXECUTION} ==="
+            echo "=== Demo scanner cycle ${cycle}/${total_cycles}; execution=${CRYPTO_SCANNER_TESTNET_EXECUTION}; data_collection=${CRYPTO_SCANNER_DEMO_DATA_COLLECTION} ==="
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-lifecycle-maintenance
             crypto-scanner-cycle
 
