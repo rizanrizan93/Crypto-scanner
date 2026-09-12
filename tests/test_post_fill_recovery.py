@@ -103,6 +103,31 @@ def _fill() -> UserTradeFill:
     )
 
 
+def _history_fill(
+    *,
+    trade_id: str,
+    order_id: str,
+    side: str,
+    time_ms: int,
+) -> UserTradeFill:
+    return UserTradeFill(
+        symbol="TRXUSDT",
+        trade_id=trade_id,
+        order_id=order_id,
+        side=side,
+        position_side="BOTH",
+        price=Decimal("0.30"),
+        qty=Decimal("39499"),
+        quote_qty=Decimal("11849.7"),
+        realized_pnl=Decimal("0"),
+        commission=Decimal("1"),
+        commission_asset="USDT",
+        buyer=side == "BUY",
+        maker=False,
+        time_ms=time_ms,
+    )
+
+
 def _algo(order_type: str, client_id: str, trigger: str) -> AlgoOrderSnapshot:
     return AlgoOrderSnapshot(
         algo_id=f"algo:{client_id}",
@@ -270,6 +295,66 @@ def test_unfilled_pending_row_never_reaches_protector_write(
     assert "not authoritatively FILLED" in result.blockers[0]
     assert linkage.fills == []
     assert not linkage.position_saved
+
+
+def test_stale_recoverable_order_cannot_bind_to_new_same_symbol_episode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StaleEpisodeReader(FakeReader):
+        def get_user_trades(self, symbol: str, **kwargs: object) -> tuple[UserTradeFill, ...]:
+            assert symbol == "TRXUSDT"
+            history = (
+                _history_fill(
+                    trade_id="old-entry",
+                    order_id="venue-42",
+                    side="SELL",
+                    time_ms=NOW + 2,
+                ),
+                _history_fill(
+                    trade_id="old-close",
+                    order_id="venue-old-close",
+                    side="BUY",
+                    time_ms=NOW + 20,
+                ),
+                _history_fill(
+                    trade_id="current-entry",
+                    order_id="venue-current",
+                    side="SELL",
+                    time_ms=NOW + 30,
+                ),
+            )
+            if "start_time_ms" in kwargs:
+                return history
+            return history
+
+    reader = StaleEpisodeReader()
+    linkage = FakeLinkage()
+    replacement_called = False
+
+    monkeypatch.setattr(
+        "crypto_scanner.post_fill_recovery._load_recoverable_plan",
+        lambda _config, _symbol: _plan(),
+    )
+
+    def replace(*_args, **_kwargs):
+        nonlocal replacement_called
+        replacement_called = True
+
+    monkeypatch.setattr(
+        "crypto_scanner.post_fill_recovery.replace_aggregate_protection",
+        replace,
+    )
+
+    result = recover_post_fill_failures(reader, object(), linkage, _config())
+
+    assert replacement_called is False
+    assert result.recovered_protection_symbols == ()
+    assert result.recovered_linkage_symbols == ()
+    assert result.emergency_flattened_symbols == ()
+    assert len(result.blockers) == 1
+    assert "does not match current exchange position episode" in result.blockers[0]
+    assert linkage.fills == []
+    assert linkage.position_saved is False
 
 
 def test_stale_recovery_triggers_flatten_instead_of_resubmitting(
