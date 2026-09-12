@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict, dataclass, replace
 
 from crypto_scanner.binance.auth import BinanceDemoCredentials
 from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient
@@ -34,9 +35,16 @@ class ProfitLockWatchResult:
     persistence_status: str = "HEALTHY"
     degraded_reason: str | None = None
     retry_count: int = 0
+    tick_duration_seconds: float = 0.0
 
 
 def run_profit_lock_tick() -> ProfitLockWatchResult:
+    started = time.monotonic()
+    result = _run_profit_lock_tick()
+    return replace(result, tick_duration_seconds=round(time.monotonic() - started, 6))
+
+
+def _run_profit_lock_tick() -> ProfitLockWatchResult:
     """Evaluate and, when justified, ratchet Demo protectors once.
 
     This is deliberately a one-shot operation. Cadence is owned by the existing
