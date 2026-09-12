@@ -20,5 +20,9 @@ def test_demo_runtime_keeps_serial_safety_contract():
 
 def test_non_scheduled_non_continuous_run_is_single_cycle():
     text = Path(".github/workflows/demo-scanner-runtime.yml").read_text()
-    assert 'if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${{ inputs.continuous_window }}" != "true" ]; then' in text
+    condition = (
+        'if [ "${GITHUB_EVENT_NAME}" != "schedule" ] '
+        '&& [ "${{ inputs.continuous_window }}" != "true" ]; then'
+    )
+    assert condition in text
     assert "total_cycles=1" in text
