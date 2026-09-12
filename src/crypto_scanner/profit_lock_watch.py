@@ -54,9 +54,12 @@ def run_profit_lock_tick() -> ProfitLockWatchResult:
 
 def _scanner_owned_active_algos(reader: BinanceDemoPrivateReadOnlyClient) -> tuple[object, ...]:
     """Read-only precheck so ordinary flat ticks never initialize an exchange writer."""
+    get_open_algos = getattr(reader, "get_open_algo_orders", None)
+    if get_open_algos is None:
+        return ()
     return tuple(
         order
-        for order in reader.get_open_algo_orders()
+        for order in get_open_algos()
         if order.status.upper() in _ACTIVE_ALGO_STATUSES
         and order.client_algo_id.startswith("cs-")
     )
