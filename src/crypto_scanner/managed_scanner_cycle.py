@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time as _stdlib_time
 from collections.abc import Callable
+from dataclasses import replace
 
 from crypto_scanner import scanner_cycle
 from crypto_scanner.hot_watch import FAST_WATCH_INTERVAL_SECONDS
@@ -12,6 +14,20 @@ from crypto_scanner.profit_lock_watch import (
     ProfitLockWatchResult,
     emit_profit_lock_tick,
     run_profit_lock_tick,
+)
+from crypto_scanner.strategy_promotion import (
+    PromotionStage,
+    StrategyRuntimeSelection,
+    load_strategy_runtime,
+)
+
+_DEMO_COLLECTION_ENV = "CRYPTO_SCANNER_DEMO_DATA_COLLECTION"
+_DEMO_COLLECTION_STAGES = frozenset(
+    {
+        "UNVALIDATED",
+        PromotionStage.HISTORICAL_PENDING.value,
+        PromotionStage.HISTORICAL_REJECTED.value,
+    }
 )
 
 
@@ -41,10 +57,56 @@ class ProfitLockManagedClock:
             self._emit_fn(result)
 
 
+def demo_data_collection_enabled() -> bool:
+    return os.getenv(_DEMO_COLLECTION_ENV, "DISABLED").strip().upper() == "ENABLED"
+
+
+def authorize_demo_data_collection(
+    runtime: StrategyRuntimeSelection,
+    *,
+    enabled: bool,
+) -> StrategyRuntimeSelection:
+    """Allow Demo-only acquisition for research states without promoting them.
+
+    The returned runtime may be executable by scanner_cycle, but its promotion_stage
+    remains unchanged. QUARANTINED and all other non-research states remain fail-closed.
+    The Binance writer still independently requires the TestnetExecutionArm.
+    """
+
+    if not enabled or runtime.execution_authorized:
+        return runtime
+    if runtime.promotion_stage not in _DEMO_COLLECTION_STAGES:
+        return runtime
+    return replace(runtime, execution_authorized=True)
+
+
+def _load_managed_strategy_runtime(config: object) -> StrategyRuntimeSelection:
+    runtime = load_strategy_runtime(config)  # type: ignore[arg-type]
+    return authorize_demo_data_collection(
+        runtime,
+        enabled=demo_data_collection_enabled(),
+    )
+
+
 def main() -> None:
-    """Run the existing scanner cycle with serialized 1-minute position management."""
+    """Run the scanner with serialized management and optional Demo data collection."""
     original_time = scanner_cycle.time
+    original_loader = scanner_cycle.load_strategy_runtime
+    collection_enabled = demo_data_collection_enabled()
     scanner_cycle.time = ProfitLockManagedClock()
+    scanner_cycle.load_strategy_runtime = _load_managed_strategy_runtime
+    if collection_enabled:
+        print(
+            json.dumps(
+                {
+                    "status": "DEMO_DATA_COLLECTION_MODE_ENABLED",
+                    "promotion_bypass": False,
+                    "forward_demo_credit": False,
+                    "live_trading_locked": True,
+                },
+                sort_keys=True,
+            )
+        )
     try:
         scanner_cycle.main()
     except TransientPersistenceError:
@@ -63,6 +125,7 @@ def main() -> None:
         )
     finally:
         scanner_cycle.time = original_time
+        scanner_cycle.load_strategy_runtime = original_loader
 
 
 if __name__ == "__main__":
