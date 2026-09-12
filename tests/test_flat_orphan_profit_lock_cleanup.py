@@ -73,7 +73,10 @@ def test_flat_tick_cleans_stop_and_take_profit_siblings(monkeypatch) -> None:
 
 
 def test_flat_tick_preserves_manual_conditional_and_never_creates_writer(monkeypatch) -> None:
-    manual = replace(_algo("cs-template", "TAKE_PROFIT_MARKET", "1", "2.00"), client_algo_id="manual-tp")
+    manual = replace(
+        _algo("cs-template", "TAKE_PROFIT_MARKET", "1", "2.00"),
+        client_algo_id="manual-tp",
+    )
     reader = FakeReader((), [manual])
     _wire_flat_tick(monkeypatch, reader)
 
