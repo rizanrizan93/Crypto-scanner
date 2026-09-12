@@ -157,20 +157,21 @@ def _chunks(values: tuple[str, ...], size: int = 100) -> tuple[tuple[str, ...], 
 def _strategy_signal_ids(
     config: SupabasePersistenceConfig,
     strategy_id: str,
+    *,
+    promotion_stage: str | None = None,
 ) -> tuple[str, ...]:
     signal_ids: list[str] = []
     for offset in range(0, 10_000, 1000):
-        page = _rest_rows(
-            config,
-            "signals",
-            {
-                "select": "signal_id",
-                "evidence->>strategy_id": f"eq.{strategy_id}",
-                "order": "created_at_ms.asc",
-                "limit": "1000",
-                "offset": str(offset),
-            },
-        )
+        params = {
+            "select": "signal_id",
+            "evidence->>strategy_id": f"eq.{strategy_id}",
+            "order": "created_at_ms.asc",
+            "limit": "1000",
+            "offset": str(offset),
+        }
+        if promotion_stage is not None:
+            params["evidence->>promotion_stage"] = f"eq.{promotion_stage}"
+        page = _rest_rows(config, "signals", params)
         if any(not row.get("signal_id") for row in page):
             raise PersistenceError("strategy signal identity is missing")
         signal_ids.extend(str(row["signal_id"]) for row in page)
@@ -185,9 +186,22 @@ def forward_demo_evidence(
     config: SupabasePersistenceConfig,
     strategy_id: str,
 ) -> tuple[tuple[Decimal, ...], int, dict[str, object]]:
-    signal_ids = _strategy_signal_ids(config, strategy_id)
+    signal_ids = _strategy_signal_ids(
+        config,
+        strategy_id,
+        promotion_stage=PromotionStage.FORWARD_DEMO.value,
+    )
     if not signal_ids:
-        return (), 0, {"strategy_id": strategy_id, "signal_count": 0, "closed_count": 0}
+        return (
+            (),
+            0,
+            {
+                "strategy_id": strategy_id,
+                "signal_count": 0,
+                "closed_count": 0,
+                "promotion_stage_filter": PromotionStage.FORWARD_DEMO.value,
+            },
+        )
     geometry = tuple(
         row
         for chunk in _chunks(signal_ids)
@@ -258,6 +272,7 @@ def forward_demo_evidence(
             "closed_count": len(results),
             "evidence_duration_ms": duration,
             "safety_incident_counts": unsafe_counts,
+            "promotion_stage_filter": PromotionStage.FORWARD_DEMO.value,
         },
     )
 
