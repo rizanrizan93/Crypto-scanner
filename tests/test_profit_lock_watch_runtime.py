@@ -78,6 +78,13 @@ def test_demo_runtime_fills_idle_window_with_serial_one_minute_ticks() -> None:
         for line in workflow.splitlines()
         if line.strip().startswith("CRYPTO_SCANNER_TESTNET_EXECUTION: ${{")
     )
+    collection_line = next(
+        line
+        for line in workflow.splitlines()
+        if line.strip().startswith("CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{")
+    )
     assert "workflow_dispatch" in execution_line
     assert "event_name == 'schedule'" in execution_line
-    assert "promotion-gated Demo cycle" in workflow
+    assert "workflow_dispatch" in collection_line
+    assert "event_name == 'schedule'" in collection_line
+    assert "Demo acquisition and calibration-data cycle" in workflow
