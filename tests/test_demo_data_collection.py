@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from crypto_scanner.demo_data_calibration import demo_calibration_subject
@@ -51,7 +52,7 @@ def test_demo_calibration_uses_rejected_candidate_only_when_no_champion_exists()
         created_at_ms=1,
     )
     champion = make_strategy_version(
-        StrategyParameters(max_chase_atr="0.79"),  # type: ignore[arg-type]
+        StrategyParameters(max_chase_atr=Decimal("0.79")),
         source="TEST_CHAMPION",
         created_at_ms=2,
     )
