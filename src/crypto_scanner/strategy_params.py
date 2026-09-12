@@ -67,6 +67,16 @@ class StrategyParameters:
         params = value.get("params", value)
         if not isinstance(params, dict):
             raise ValueError("strategy params must be an object")
+        required = {
+            "stop_buffer_atr",
+            "max_chase_atr",
+            "min_rr_tp1",
+            "min_rr_tp2",
+            "profit_lock_activation_r",
+            "profit_lock_gap_r",
+        }
+        if not required.issubset(params) or set(params) - required - {"tp2_cap_rr"}:
+            raise ValueError("strategy params have missing or unknown fields")
 
         def dec(name: str, default: str) -> Decimal:
             raw = params.get(name, default)
@@ -78,9 +88,7 @@ class StrategyParameters:
             max_chase_atr=dec("max_chase_atr", "0.80"),
             min_rr_tp1=dec("min_rr_tp1", "1.20"),
             min_rr_tp2=dec("min_rr_tp2", "2.00"),
-            tp2_cap_rr=(
-                Decimal(str(cap_raw)) if cap_raw is not None and cap_raw != "" else None
-            ),
+            tp2_cap_rr=(Decimal(str(cap_raw)) if cap_raw is not None and cap_raw != "" else None),
             profit_lock_activation_r=dec("profit_lock_activation_r", "1.00"),
             profit_lock_gap_r=dec("profit_lock_gap_r", "1.00"),
         )
@@ -125,8 +133,7 @@ def load_strategy_parameters(
         )
         if response.is_error:
             raise PersistenceError(
-                "strategy state read failed "
-                f"status={response.status_code}: {response.text[:300]}"
+                f"strategy state read failed status={response.status_code}: {response.text[:300]}"
             )
         payload = response.json()
         if not isinstance(payload, list):

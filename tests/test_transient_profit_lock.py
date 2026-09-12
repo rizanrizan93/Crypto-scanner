@@ -374,3 +374,9 @@ def test_serial_workflow_has_no_profit_lock_error_suppression():
     assert "crypto-scanner-profit-lock-watch ||" not in text
     assert "crypto-scanner-profit-lock-watch &" not in text
     assert "Disarmed Phase 6 post-audit" in text
+
+
+@pytest.mark.parametrize("params", [{}, {"unexpected": 1}, {"profit_lock_gap_r": "0.75"}])
+def test_incomplete_strategy_mapping_cannot_invent_defaults(params):
+    with pytest.raises(ValueError):
+        StrategyParameters.from_mapping(params)
