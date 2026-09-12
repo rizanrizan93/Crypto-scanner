@@ -12,12 +12,12 @@ from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.execution_plan import TestnetExecutionArm
+from crypto_scanner.management_health import record_tick
 from crypto_scanner.persistence import SupabasePersistenceConfig
 from crypto_scanner.position_manager_write import cleanup_scanner_orphans
 from crypto_scanner.post_fill_recovery import recover_post_fill_failures
 from crypto_scanner.profit_lock import run_profit_lock
 from crypto_scanner.safety import SafetyContract
-from crypto_scanner.strategy_promotion import load_strategy_runtime
 from crypto_scanner.trade_linkage import DurableTradeLinkage
 
 _ACTIVE_ALGO_STATUSES = frozenset({"NEW", "PENDING", "WORKING"})
@@ -125,7 +125,6 @@ def main() -> None:
         raise LifecycleMaintenanceError(
             "lifecycle maintenance requires dedicated Crypto Scanner Supabase"
         )
-    strategy = load_strategy_runtime(persistence_config).params
 
     with (
         BinanceDemoPrivateReadOnlyClient(
@@ -151,8 +150,9 @@ def main() -> None:
             public,
             writer,
             linkage,
-            strategy,
         )
+        if any(item.status.value == "DEGRADED_PERSISTENCE_TRANSIENT" for item in profit_lock):
+            record_tick(degraded=True)
         result = run_lifecycle_maintenance(reader, writer, safety=safety)
 
     payload = asdict(result)

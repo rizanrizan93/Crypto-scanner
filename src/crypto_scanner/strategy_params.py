@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
+from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig, read_with_retry
 
 STRATEGY_STATE_KEY = "strategy_parameters_v1"
 STRATEGY_CONFIG_VERSION = "strategy-calibration-v1"
@@ -109,13 +109,15 @@ def load_strategy_parameters(
     owns_client = client is None
     http = client or httpx.Client(timeout=10.0)
     try:
-        response = http.get(
+        response = read_with_retry(
+            http,
             f"{config.url.rstrip('/')}/rest/v1/runtime_state",
             params={
                 "select": "state",
                 "state_key": f"eq.{STRATEGY_STATE_KEY}",
                 "limit": "1",
             },
+            operation="STRATEGY_STATE",
             headers={
                 "apikey": config.service_role_key,
                 "Authorization": f"Bearer {config.service_role_key}",
@@ -135,7 +137,11 @@ def load_strategy_parameters(
         if not isinstance(row, dict) or "state" not in row:
             raise PersistenceError("strategy state row is invalid")
         try:
-            return StrategyParameters.from_mapping(row["state"])
+            state = row["state"]
+            params = state.get("params", state) if isinstance(state, dict) else None
+            if not isinstance(params, dict) or not params:
+                raise ValueError("empty strategy state")
+            return StrategyParameters.from_mapping(state)
         except (ValueError, ArithmeticError, TypeError) as exc:
             raise PersistenceError(f"strategy state is malformed: {exc}") from exc
     finally:

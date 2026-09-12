@@ -53,6 +53,7 @@ from crypto_scanner.lifecycle import (
     ReconciliationSeverity,
     recover_authoritative_state,
 )
+from crypto_scanner.management_health import failure_count
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.position_manager import audit_all_protection, audit_symbol_protection
 from crypto_scanner.safety import SafetyContract
@@ -585,6 +586,13 @@ def run_scanner_cycle() -> ScannerCycleResult:
 
         selected: DurableReadySignal | None = None
         selected_is_stack = False
+        if strategy_execution_enabled:
+            fresh_runtime = load_strategy_runtime(persistence_config)
+            strategy_execution_enabled = (
+                fresh_runtime == strategy_runtime
+                and fresh_runtime.execution_authorized
+                and failure_count() == 0
+            )
         if strategy_execution_enabled and not account_gate.blocked:
             for ready in ready_signals:
                 skip = candidate_account_skip_reason(

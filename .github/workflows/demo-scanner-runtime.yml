@@ -28,7 +28,7 @@ permissions:
 
 concurrency:
   group: crypto-scanner-demo-runtime-scanner
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 jobs:
   scanner-cycle:

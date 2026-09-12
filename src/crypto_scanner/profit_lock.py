@@ -9,6 +9,7 @@ from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient
 from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.closed_trades import TradeDirection
+from crypto_scanner.persistence import TransientPersistenceError
 from crypto_scanner.position_manager import ProtectionStatus, audit_symbol_protection
 from crypto_scanner.position_manager_write import PositionManagerError, replace_aggregate_protection
 from crypto_scanner.strategy_params import StrategyParameters
@@ -36,6 +37,7 @@ class ProfitLockStatus(StrEnum):
     SKIPPED_LAYERED = "SKIPPED_LAYERED"
     SKIPPED_PARTIAL_HISTORY = "SKIPPED_PARTIAL_HISTORY"
     SKIPPED_UNPROTECTED = "SKIPPED_UNPROTECTED"
+    DEGRADED_PERSISTENCE_TRANSIENT = "DEGRADED_PERSISTENCE_TRANSIENT"
     RATCHETED = "RATCHETED"
 
 
@@ -139,7 +141,7 @@ def run_profit_lock(
     public: BinanceDemoPublicRestClient,
     writer: BinanceTestnetOrderClient,
     linkage: DurableTradeLinkage,
-    strategy: StrategyParameters,
+    strategy: StrategyParameters | None = None,
     *,
     now_ms: int | None = None,
 ) -> tuple[ProfitLockDecision, ...]:
@@ -149,7 +151,6 @@ def run_profit_lock(
     new full-size stop and TP2 are submitted and authoritatively reconciled before stale
     scanner-owned protectors are cancelled. TP2 trigger is preserved exactly.
     """
-    strategy.validate()
     measured_until_ms = now_ms if now_ms is not None else time.time_ns() // 1_000_000
     positions = tuple(position for position in reader.get_positions() if position.is_open)
     decisions: list[ProfitLockDecision] = []
@@ -175,9 +176,7 @@ def run_profit_lock(
                     locked_r=None,
                     previous_stop=(report.stop.trigger_price if report.stop else None),
                     desired_stop=None,
-                    tp2_trigger=(
-                        report.take_profit.trigger_price if report.take_profit else None
-                    ),
+                    tp2_trigger=(report.take_profit.trigger_price if report.take_profit else None),
                     detail=f"protection_status={report.status.value}",
                 )
             )
@@ -209,7 +208,9 @@ def run_profit_lock(
                 entry_time_ms=episode.entry_time_ms,
             )
             if (
-                not context.calibration_eligible
+                context.strategy_params is None
+                or not context.strategy_id
+                or not context.calibration_eligible
                 or context.signal_id is None
                 or context.initial_stop_loss is None
             ):
@@ -268,7 +269,7 @@ def run_profit_lock(
             if initial_risk <= 0:
                 raise ProfitLockError("eligible trajectory has invalid initial risk")
             current_r = metrics.current_pnl_per_unit / initial_risk
-            target_locked_r = locked_r_from_mfe(metrics.mfe_r, strategy)
+            target_locked_r = locked_r_from_mfe(metrics.mfe_r, context.strategy_params)
             if target_locked_r is None:
                 decisions.append(
                     ProfitLockDecision(
@@ -363,6 +364,23 @@ def run_profit_lock(
                     detail="full-size stop ratcheted; TP2 trigger preserved",
                 )
             )
+        except TransientPersistenceError as exc:
+            decisions.append(
+                ProfitLockDecision(
+                    symbol=symbol,
+                    status=ProfitLockStatus.DEGRADED_PERSISTENCE_TRANSIENT,
+                    signal_id=None,
+                    mfe_r=None,
+                    current_r=None,
+                    locked_r=None,
+                    previous_stop=report.stop.trigger_price,
+                    desired_stop=None,
+                    tp2_trigger=report.take_profit.trigger_price,
+                    detail=f"{exc}; exchange protectors preserved; no new risk",
+                )
+            )
+            # Stop querying this dependency for the rest of this tick.
+            break
         except (TrajectoryError, PositionManagerError, ValueError, RuntimeError) as exc:
             raise ProfitLockError(f"profit lock failed for {symbol}: {exc}") from exc
 
