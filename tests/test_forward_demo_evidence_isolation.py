@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from crypto_scanner import strategy_promotion_runtime as runtime
 from crypto_scanner.persistence import SupabasePersistenceConfig
 from crypto_scanner.strategy_promotion import PromotionStage
-from crypto_scanner import strategy_promotion_runtime as runtime
 
 
 def _config() -> SupabasePersistenceConfig:
