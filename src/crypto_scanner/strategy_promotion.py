@@ -13,6 +13,7 @@ from crypto_scanner.persistence import (
     PersistenceError,
     SupabasePersistenceConfig,
     SupabaseRestClient,
+    read_with_retry,
 )
 from crypto_scanner.strategy_params import (
     StrategyParameters,
@@ -250,13 +251,15 @@ class StrategyRuntimeSelection:
 
 class _PromotionRestClient(SupabaseRestClient):
     def select_runtime_state(self, state_key: str) -> dict[str, object] | None:
-        response = self._client.get(
+        response = read_with_retry(
+            self._client,
             f"{self.base_url}/rest/v1/runtime_state",
             params={
                 "select": "version,state",
                 "state_key": f"eq.{state_key}",
                 "limit": "1",
             },
+            operation="PROMOTION_STATE",
             headers=self._headers(),
         )
         if response.is_error:

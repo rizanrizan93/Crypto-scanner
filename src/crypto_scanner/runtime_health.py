@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from crypto_scanner.management_health import failure_count
 from crypto_scanner.persistence import (
     PersistenceError,
     SupabasePersistenceConfig,
@@ -110,12 +111,21 @@ def main() -> None:
     if not config.enabled:
         raise SystemExit("Crypto Scanner Supabase persistence is required for heartbeats")
 
+    details = _github_details()
+    status = args.status
+    if args.component == "SCANNER_CYCLE":
+        failures = failure_count()
+        details["management_consecutive_failures"] = failures
+        details["management_status"] = "DEGRADED" if failures else "RUNNING"
+        details["management_sustained_outage"] = failures >= 3
+        if failures and status != "FAILED":
+            status = "BLOCKED"
     with SupabaseRuntimeHealthStore(config) as store:
         heartbeat = store.record(
             args.component,
-            args.status,
+            status,
             git_sha=os.getenv("GITHUB_SHA"),
-            details=_github_details(),
+            details=details,
         )
     print(
         json.dumps(

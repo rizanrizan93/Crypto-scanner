@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import time as _stdlib_time
 from collections.abc import Callable
 
 from crypto_scanner import scanner_cycle
 from crypto_scanner.hot_watch import FAST_WATCH_INTERVAL_SECONDS
+from crypto_scanner.management_health import record_tick
+from crypto_scanner.persistence import TransientPersistenceError
 from crypto_scanner.profit_lock_watch import (
     ProfitLockWatchResult,
     emit_profit_lock_tick,
@@ -44,6 +47,20 @@ def main() -> None:
     scanner_cycle.time = ProfitLockManagedClock()
     try:
         scanner_cycle.main()
+    except TransientPersistenceError:
+        # Only the typed READ exhaustion is handled. Unknown write outcomes,
+        # integrity errors and protection violations remain hard failures.
+        health = record_tick(degraded=True)
+        print(
+            json.dumps(
+                {
+                    "status": "DEGRADED_PERSISTENCE_TRANSIENT",
+                    "execution_authorized": False,
+                    "management_heartbeat": health,
+                    "live_trading_locked": True,
+                }
+            )
+        )
     finally:
         scanner_cycle.time = original_time
 

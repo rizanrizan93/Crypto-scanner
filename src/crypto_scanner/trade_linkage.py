@@ -17,7 +17,10 @@ from crypto_scanner.persistence import (
     SupabasePersistenceConfig,
     SupabaseRestClient,
     _without_none,
+    read_deadline,
+    read_with_retry,
 )
+from crypto_scanner.strategy_params import StrategyParameters
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,12 +31,12 @@ class DurableTradeContext:
     setup: str | None
     regime: str | None
     calibration_eligible: bool
+    strategy_id: str | None = None
+    strategy_params: StrategyParameters | None = None
 
 
 def stable_run_id(run: DiscoveryRun) -> str:
-    digest = hashlib.sha256(
-        f"BINANCE|DEMO|DISCOVERY|{run.started_at_ms}".encode()
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"BINANCE|DEMO|DISCOVERY|{run.started_at_ms}".encode()).hexdigest()[:24]
     return f"run-{digest}"
 
 
@@ -75,9 +78,11 @@ class _LinkageRestClient(SupabaseRestClient):
     ) -> list[dict[str, object]]:
         if not table.replace("_", "").isalnum():
             raise PersistenceError("invalid persistence table name")
-        response = self._client.get(
+        response = read_with_retry(
+            self._client,
             f"{self.base_url}/rest/v1/{table}",
             params=params,
+            operation="TRADE_CONTEXT",
             headers=self._headers(),
         )
         if response.is_error:
@@ -401,6 +406,12 @@ class DurableTradeLinkage:
         direction: TradeDirection,
         entry_time_ms: int,
     ) -> DurableTradeContext:
+        with read_deadline("TRADE_CONTEXT"):
+            return self._resolve_context(
+                symbol=symbol, direction=direction, entry_time_ms=entry_time_ms
+            )
+
+    def _resolve_context(self, *, symbol, direction, entry_time_ms):
         position_id = stable_position_id_from_episode(symbol, direction, entry_time_ms)
         rows = self._rest.select(
             "positions",
@@ -413,6 +424,8 @@ class DurableTradeLinkage:
         if not rows:
             return DurableTradeContext(position_id, None, None, None, None, False)
         position = rows[0]
+        if position.get("position_id") != position_id:
+            raise PersistenceError("position identity mismatch")
         stop_raw = position.get("initial_stop_loss")
         initial_stop = Decimal(str(stop_raw)) if stop_raw is not None else None
         signal_raw = position.get("signal_id")
@@ -430,7 +443,7 @@ class DurableTradeLinkage:
         signals = self._rest.select(
             "signals",
             params={
-                "select": "signal_id,setup,regime,status",
+                "select": "signal_id,setup,regime,status,evidence",
                 "signal_id": f"eq.{signal_id}",
                 "limit": "1",
             },
@@ -443,6 +456,37 @@ class DurableTradeLinkage:
                 "limit": "1",
             },
         )
+        if signals and signals[0].get("signal_id") != signal_id:
+            raise PersistenceError("signal identity mismatch")
+        if geometry and geometry[0].get("signal_id") != signal_id:
+            raise PersistenceError("geometry identity mismatch")
+        strategy_id = None
+        strategy_params = None
+        if signals:
+            evidence = signals[0].get("evidence")
+            if evidence is not None:
+                if not isinstance(evidence, dict):
+                    raise PersistenceError("entry strategy evidence is malformed")
+                snapshot = evidence.get("strategy_params")
+                strategy_id = evidence.get("strategy_id")
+                if snapshot is not None or strategy_id is not None:
+                    required = set(StrategyParameters().to_dict())
+                    if (
+                        not isinstance(strategy_id, str)
+                        or not strategy_id
+                        or not isinstance(snapshot, dict)
+                        or set(snapshot) != required
+                    ):
+                        raise PersistenceError("entry strategy snapshot is incomplete")
+                    try:
+                        strategy_params = StrategyParameters.from_mapping(snapshot)
+                        from crypto_scanner.strategy_promotion import strategy_version_id
+
+                        if strategy_version_id(strategy_params) != strategy_id:
+                            raise ValueError("entry strategy identity mismatch")
+                    except (ValueError, ArithmeticError, TypeError) as exc:
+                        raise PersistenceError("entry strategy snapshot is malformed") from exc
+
         setup = str(signals[0].get("setup")) if signals and signals[0].get("setup") else None
         regime = str(signals[0].get("regime")) if signals and signals[0].get("regime") else None
         status = str(signals[0].get("status")) if signals else None
@@ -454,9 +498,7 @@ class DurableTradeLinkage:
         if initial_stop is None:
             initial_stop = geometry_stop
         stop_matches = (
-            initial_stop is not None
-            and geometry_stop is not None
-            and initial_stop == geometry_stop
+            initial_stop is not None and geometry_stop is not None and initial_stop == geometry_stop
         )
         eligible = bool(setup and regime and status == "EXECUTION_READY" and stop_matches)
         return DurableTradeContext(
@@ -466,4 +508,6 @@ class DurableTradeLinkage:
             setup=setup,
             regime=regime,
             calibration_eligible=eligible,
+            strategy_id=strategy_id,
+            strategy_params=strategy_params,
         )

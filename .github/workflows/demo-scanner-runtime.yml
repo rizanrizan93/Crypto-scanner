@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fix/profit-lock-transient-read
     paths:
       - "src/**"
       - "pyproject.toml"
@@ -28,7 +29,7 @@ permissions:
 
 concurrency:
   group: crypto-scanner-demo-runtime-scanner
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 jobs:
   scanner-cycle:
@@ -77,9 +78,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The remediation branch runs the same twelve-cycle window on push.
+          # Push cannot enable new Demo entries; protection management remains armed.
           total_cycles=12
           profit_lock_tick_seconds=60
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${{ inputs.continuous_window }}" != "true" ]; then
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${{ inputs.continuous_window }}" != "true" ] && [ "${GITHUB_REF_NAME}" != "fix/profit-lock-transient-read" ]; then
             total_cycles=1
           fi
 

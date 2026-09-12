@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import random
+import signal
+import threading
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -16,6 +23,123 @@ SCHEMA_VERSION = "crypto-scanner-persistence-v1"
 
 class PersistenceError(RuntimeError):
     """Raised when durable Crypto Scanner persistence fails."""
+
+
+class TransientPersistenceError(PersistenceError):
+    """An idempotent READ exhausted its bounded transient retry policy."""
+
+    def __init__(self, operation: str, attempts: int) -> None:
+        self.operation = operation
+        self.attempts = attempts
+        super().__init__(
+            f"transient Supabase read exhausted operation={operation} attempts={attempts}"
+        )
+
+
+_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_RETRY_TRANSPORT = (
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+)
+
+
+_deadline_owned: ContextVar[bool] = ContextVar("read_deadline_owned", default=False)
+_read_attempt: ContextVar[int] = ContextVar("read_attempt", default=1)
+read_retry_count: ContextVar[int] = ContextVar("read_retry_count", default=0)
+
+
+@contextmanager
+def read_deadline(operation: str, seconds: float = 12.0):
+    """Hard wall-clock bound on serialized Linux runtime READs, including slow bodies.
+
+    No background worker survives the deadline. Never wrap exchange writes in this scope.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        raise PersistenceError("bounded persistence reads require the serialized main thread")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    if previous_timer[0]:
+        # Only an outer persistence deadline may own this timer.
+        if not _deadline_owned.get():
+            raise PersistenceError("read deadline conflicts with an existing process timer")
+        yield
+        return
+
+    def exhausted(_signum, _frame):
+        raise TransientPersistenceError(operation, _read_attempt.get())
+
+    token = _deadline_owned.set(True)
+    signal.signal(signal.SIGALRM, exhausted)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        _deadline_owned.reset(token)
+
+
+def read_with_retry(client, url, *, operation, params, headers):
+    with read_deadline(operation):
+        return _read_with_retry(client, url, operation=operation, params=params, headers=headers)
+
+
+def _read_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    operation: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+) -> httpx.Response:
+    """READ only. Three attempts; 12s admission budget; no body/credentials in logs.
+
+    HTTP phases are capped at 2s; the outer deadline enforces 12s total wall time.
+    No application writes or exchange requests are routed through this helper.
+    """
+    started = time.monotonic()
+    for attempt in range(1, 4):
+        _read_attempt.set(attempt)
+        status = None
+        error_class = None
+        response = None
+        try:
+            response = client.get(url, params=params, headers=headers, timeout=2.0)
+            status = response.status_code
+            retryable = status in _RETRY_STATUSES
+        except _RETRY_TRANSPORT as exc:
+            error_class = type(exc).__name__
+            retryable = True
+        recovered = response is not None and 200 <= response.status_code < 300
+        print(
+            json.dumps(
+                {
+                    "dependency": "SUPABASE",
+                    "operation": operation,
+                    "attempt": attempt,
+                    "max_attempts": 3,
+                    "status_code": status,
+                    "error_class": error_class,
+                    "retryable": retryable,
+                    "recovered": recovered and attempt > 1,
+                }
+            )
+        )
+        if not retryable:
+            if not recovered:
+                raise PersistenceError(
+                    f"Supabase read failed operation={operation} status={status}"
+                )
+            return response
+        delay = 0.25 * 2 ** (attempt - 1) + random.uniform(0, 0.1)
+        if attempt == 3 or time.monotonic() - started + delay + 3 > 12:
+            raise TransientPersistenceError(operation, attempt)
+        read_retry_count.set(read_retry_count.get() + 1)
+        time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +198,7 @@ def _without_none(row: dict[str, object]) -> dict[str, object]:
 def stable_position_id(record: TrajectoryRecord) -> str:
     snapshot = record.snapshot
     raw = (
-        f"BINANCE|DEMO|{snapshot.symbol}|{snapshot.direction.value}|"
-        f"{snapshot.entry_time_ms}"
+        f"BINANCE|DEMO|{snapshot.symbol}|{snapshot.direction.value}|{snapshot.entry_time_ms}"
     ).encode()
     digest = hashlib.sha256(raw).hexdigest()[:32]
     return f"pos-{digest}"
@@ -129,9 +252,7 @@ class SupabaseRestClient:
             return
         if not table.replace("_", "").isalnum():
             raise PersistenceError("invalid persistence table name")
-        if not on_conflict or any(
-            not column.replace("_", "").isalnum() for column in on_conflict
-        ):
+        if not on_conflict or any(not column.replace("_", "").isalnum() for column in on_conflict):
             raise PersistenceError("invalid persistence conflict target")
 
         normalized = tuple(_without_none(row) for row in rows)
@@ -140,8 +261,7 @@ class SupabaseRestClient:
             missing_conflict = tuple(column for column in on_conflict if column not in row)
             if missing_conflict:
                 raise PersistenceError(
-                    "persistence row is missing conflict columns: "
-                    + ",".join(missing_conflict)
+                    "persistence row is missing conflict columns: " + ",".join(missing_conflict)
                 )
             signature = tuple(sorted(row))
             groups.setdefault(signature, []).append(row)
@@ -165,15 +285,16 @@ class SupabaseRestClient:
 
     def schema_version(self) -> str:
         url = f"{self.base_url}/rest/v1/schema_meta"
-        response = self._client.get(
+        response = read_with_retry(
+            self._client,
             url,
             params={"select": "value", "key": "eq.schema_version", "limit": "1"},
+            operation="SCHEMA_VERSION",
             headers=self._headers(),
         )
         if response.is_error:
             raise PersistenceError(
-                f"Supabase schema check failed status={response.status_code}: "
-                f"{response.text[:500]}"
+                f"Supabase schema check failed status={response.status_code}: {response.text[:500]}"
             )
         payload = response.json()
         if not isinstance(payload, list) or len(payload) != 1:
@@ -320,14 +441,10 @@ class SupabaseTrajectoryStore:
                 )
 
         closed_positions = tuple(
-            row
-            for row in positions.values()
-            if row.get("state") == TrajectoryState.CLOSED.value
+            row for row in positions.values() if row.get("state") == TrajectoryState.CLOSED.value
         )
         open_positions = tuple(
-            row
-            for row in positions.values()
-            if row.get("state") == TrajectoryState.OPEN.value
+            row for row in positions.values() if row.get("state") == TrajectoryState.OPEN.value
         )
         if len(closed_positions) + len(open_positions) != len(positions):
             raise PersistenceError("position persistence contains an invalid trajectory state")
