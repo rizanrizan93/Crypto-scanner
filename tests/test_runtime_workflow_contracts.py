@@ -42,12 +42,16 @@ def test_demo_runtime_workflows_have_independent_concurrency_groups() -> None:
     assert all(fields == 5 for workflow in workflows for fields in _cron_fields(workflow))
 
 
-def test_scanner_covers_full_hour_and_remains_promotion_gated() -> None:
+def test_scanner_covers_full_hour_and_collects_demo_calibration_data() -> None:
     workflow = _workflow("demo-scanner-runtime.yml")
 
     assert "total_cycles=12" in workflow
     assert "total_cycles=11" not in workflow
-    assert "promotion-gated Demo cycle" in workflow
+    assert "Demo acquisition and calibration-data cycle" in workflow
+    assert "CRYPTO_SCANNER_DEMO_DATA_COLLECTION" in workflow
+    assert "HISTORICAL_PENDING/HISTORICAL_REJECTED" in workflow
+    assert "QUARANTINED remains fail-closed" in workflow
+    assert "FORWARD_DEMO promotion credit" in workflow
     assert "event_name == 'schedule'" in workflow
     assert "inputs.continuous_window" in workflow
 
