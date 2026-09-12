@@ -46,6 +46,7 @@ _RETRY_TRANSPORT = (
 )
 
 
+_deadline_owned: ContextVar[bool] = ContextVar("read_deadline_owned", default=False)
 _read_attempt: ContextVar[int] = ContextVar("read_attempt", default=1)
 read_retry_count: ContextVar[int] = ContextVar("read_retry_count", default=0)
 
@@ -61,13 +62,16 @@ def read_deadline(operation: str, seconds: float = 12.0):
     previous_handler = signal.getsignal(signal.SIGALRM)
     previous_timer = signal.getitimer(signal.ITIMER_REAL)
     if previous_timer[0]:
-        # An outer read deadline (e.g. complete trade-context resolution) owns the timer.
+        # Only an outer persistence deadline may own this timer.
+        if not _deadline_owned.get():
+            raise PersistenceError("read deadline conflicts with an existing process timer")
         yield
         return
 
     def exhausted(_signum, _frame):
         raise TransientPersistenceError(operation, _read_attempt.get())
 
+    token = _deadline_owned.set(True)
     signal.signal(signal.SIGALRM, exhausted)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
@@ -75,6 +79,7 @@ def read_deadline(operation: str, seconds: float = 12.0):
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
+        _deadline_owned.reset(token)
 
 
 def read_with_retry(client, url, *, operation, params, headers):

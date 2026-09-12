@@ -9,7 +9,7 @@ from crypto_scanner.binance.private_rest import BinanceDemoPrivateReadOnlyClient
 from crypto_scanner.binance.private_write import BinanceTestnetOrderClient
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.closed_trades import TradeDirection
-from crypto_scanner.persistence import TransientPersistenceError
+from crypto_scanner.persistence import TransientPersistenceError, read_deadline
 from crypto_scanner.position_manager import ProtectionStatus, audit_symbol_protection
 from crypto_scanner.position_manager_write import PositionManagerError, replace_aggregate_protection
 from crypto_scanner.strategy_params import StrategyParameters
@@ -154,6 +154,7 @@ def run_profit_lock(
     measured_until_ms = now_ms if now_ms is not None else time.time_ns() // 1_000_000
     positions = tuple(position for position in reader.get_positions() if position.is_open)
     decisions: list[ProfitLockDecision] = []
+    persistence_budget_remaining = 12.0
 
     for position in positions:
         symbol = position.symbol
@@ -202,11 +203,18 @@ def run_profit_lock(
                 )
                 continue
 
-            context = linkage.resolve_context(
-                symbol=symbol,
-                direction=episode.direction,
-                entry_time_ms=episode.entry_time_ms,
-            )
+            context_started = time.monotonic()
+            if persistence_budget_remaining <= 0:
+                raise TransientPersistenceError("PROFIT_LOCK_CONTEXT_BUDGET", 0)
+            try:
+                with read_deadline("PROFIT_LOCK_CONTEXT", persistence_budget_remaining):
+                    context = linkage.resolve_context(
+                        symbol=symbol,
+                        direction=episode.direction,
+                        entry_time_ms=episode.entry_time_ms,
+                    )
+            finally:
+                persistence_budget_remaining -= time.monotonic() - context_started
             if (
                 context.strategy_params is None
                 or not context.strategy_id

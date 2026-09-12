@@ -14,7 +14,7 @@ made an otherwise flat protection tick dependent on global persistence.
   transient httpx transport failures. Maximum three attempts, exponential
   250ms/500ms backoff plus 0–100ms jitter; HTTP phase timeout 2s. Serialized
   Linux SIGALRM enforces a hard 12s READ deadline, including slow bodies.
-  Complete entry-context resolution shares that deadline. No background
+  All entry-context reads share an aggregate 12s persistence budget per tick. No background
   worker or retry of exchange/database writes is introduced.
 - Flat watch validates the safety contract, execution arm and config, then
   checks Binance positions before constructing persistence/public/writer
