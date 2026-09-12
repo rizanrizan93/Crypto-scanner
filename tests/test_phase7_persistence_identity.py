@@ -59,9 +59,11 @@ def test_phase7_parent_position_has_explicit_reconstruction_identity() -> None:
         service_role_key="secret",
     )
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
-        with SupabaseTrajectoryStore(config, client=http_client) as store:
-            store.save((record,))
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as http_client,
+        SupabaseTrajectoryStore(config, client=http_client) as store,
+    ):
+        store.save((record,))
 
     source = captured_position["source"]
     assert isinstance(source, dict)
