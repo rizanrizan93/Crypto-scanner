@@ -361,6 +361,7 @@ class SupabaseTrajectoryStore:
                 "latest_mark_price": snapshot.current_price,
                 "updated_at_ms": snapshot.measured_until_ms,
                 "source": {
+                    "identity_chain": "PHASE7_TRAJECTORY_RECONSTRUCTION",
                     "quality": snapshot.quality,
                     "history_complete": snapshot.history_complete,
                     "persistence_mode": "SUPABASE",
