@@ -135,12 +135,12 @@ def test_writes_not_retried():
 
 def test_deadline_interrupts_slow_read():
     import time
+    from threading import Event
 
     start = time.monotonic()
     with pytest.raises(TransientPersistenceError), read_deadline("TEST", seconds=0.02):
-        # Busy loop also models a response body trickling below socket timeout.
-        while time.monotonic() - start < 1:
-            pass
+        # Block as a socket read would, without a timing-sensitive bytecode busy loop.
+        Event().wait(1)
     assert time.monotonic() - start < 0.2
 
 

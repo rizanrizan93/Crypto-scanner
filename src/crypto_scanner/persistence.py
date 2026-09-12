@@ -46,6 +46,7 @@ _RETRY_TRANSPORT = (
 )
 
 
+_read_attempt: ContextVar[int] = ContextVar("read_attempt", default=1)
 read_retry_count: ContextVar[int] = ContextVar("read_retry_count", default=0)
 
 
@@ -65,7 +66,7 @@ def read_deadline(operation: str, seconds: float = 12.0):
         return
 
     def exhausted(_signum, _frame):
-        raise TransientPersistenceError(operation, read_retry_count.get() + 1)
+        raise TransientPersistenceError(operation, _read_attempt.get())
 
     signal.signal(signal.SIGALRM, exhausted)
     signal.setitimer(signal.ITIMER_REAL, seconds)
@@ -96,6 +97,7 @@ def _read_with_retry(
     """
     started = time.monotonic()
     for attempt in range(1, 4):
+        _read_attempt.set(attempt)
         status = None
         error_class = None
         response = None
