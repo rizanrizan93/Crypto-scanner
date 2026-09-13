@@ -5,8 +5,8 @@ from crypto_scanner.adaptive_regime_signal import H4_MS, RegimePoint, Setup, bui
 from crypto_scanner.binance.models import Candle
 
 
-def c(i: int, o: str, h: str, l: str, close: str) -> Candle:
-    return Candle(start_time_ms=i * H4_MS, open=Decimal(o), high=Decimal(h), low=Decimal(l), close=Decimal(close), volume=Decimal("1"), turnover=Decimal("1"))
+def c(i: int, o: str, h: str, low_: str, close: str) -> Candle:
+    return Candle(start_time_ms=i * H4_MS, open=Decimal(o), high=Decimal(h), low=Decimal(low_), close=Decimal(close), volume=Decimal("1"), turnover=Decimal("1"))
 
 
 def test_bull_routes_long_and_bear_routes_short() -> None:
