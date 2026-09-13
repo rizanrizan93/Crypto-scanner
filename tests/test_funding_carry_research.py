@@ -1,3 +1,5 @@
+import io
+import zipfile
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -18,6 +20,7 @@ from crypto_scanner.funding_carry_research import (
     split_calendar,
     summarize,
 )
+from crypto_scanner.run_funding_carry_research import _parse_funding_zip
 
 
 def _funding(stamp: datetime, rate: float) -> FundingPoint:
@@ -57,6 +60,22 @@ def test_funding_candidates_are_frozen_before_oos():
     ]
 
 
+def test_binance_vision_funding_archive_schema_is_parsed():
+    first = int(datetime(2026, 1, 1, 0, tzinfo=UTC).timestamp() * 1000)
+    second = int(datetime(2026, 1, 1, 8, tzinfo=UTC).timestamp() * 1000)
+    raw = (
+        "calc_time,funding_interval_hours,last_funding_rate\n"
+        f"{first},8,0.0001\n"
+        f"{second},8,-0.0002\n"
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("BTCUSDT-fundingRate-2026-01.csv", raw)
+    points = _parse_funding_zip(buffer.getvalue())
+    assert [point.funding_time_ms for point in points] == [first, second]
+    assert [point.funding_rate for point in points] == [0.0001, -0.0002]
+
+
 def test_only_complete_six_bar_utc_days_are_kept():
     first = date(2026, 1, 1)
     second = date(2026, 1, 2)
@@ -91,7 +110,9 @@ def test_negative_funding_goes_long_and_positive_funding_goes_short():
                         rate,
                     )
                 )
-        funding_by_symbol[symbol] = tuple(sorted(points, key=lambda point: point.funding_time_ms))
+        funding_by_symbol[symbol] = tuple(
+            sorted(points, key=lambda point: point.funding_time_ms)
+        )
 
     longs, shorts = select_sides(funding_by_symbol, signal_day, candidate)
     assert len(longs) == len(shorts) == 3
