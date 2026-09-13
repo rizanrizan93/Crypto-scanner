@@ -11,8 +11,8 @@ from crypto_scanner.binance_public_archive import (
 from crypto_scanner.config import DEFAULT_UNIVERSE
 from crypto_scanner.trend_breakout_research import (
     FROZEN_CANDIDATES,
-    reprice_cost,
     replay_candidate,
+    reprice_cost,
     split_calendar,
     summary_payload,
 )
