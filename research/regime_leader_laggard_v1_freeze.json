@@ -1,0 +1,21 @@
+{
+  "schema_version":"CRYPTO_REGIME_LEADER_LAGGARD_V1_FREEZE",
+  "frozen_at_utc":"2026-09-13T16:58:00Z",
+  "research_only":true,
+  "execution_influence":false,
+  "live_execution_enabled":false,
+  "regime":"same frozen BTC D1 EMA200 plus 60D momentum contract as Adaptive Regime Router V1",
+  "rebalance":"each completed Monday UTC D1 candle; enter at next Tuesday 00:00 UTC open; hold exactly 7 days to next Tuesday open",
+  "ranking":"28D completed-close return ending on Monday signal close",
+  "bull":"LONG top 3 strongest eligible symbols, equal one-third weights, gross exposure 1.0",
+  "bear":"SHORT bottom 3 weakest eligible symbols, equal one-third weights, gross exposure 1.0",
+  "flat":"cash / NO_TRADE",
+  "eligibility":"requires continuous prior 28 D1 bars and exact entry/exit opens; no backfill across missing history",
+  "costs_bps_round_trip":{"base":8.0,"stress":14.0,"severe":25.0},
+  "funding":"actual funding strictly entry<timestamp<exit; stress/severe benefit x0.8 and adverse funding x1.2",
+  "periods":{"warmup":"2023","train":"2024","validation":"2025","oos":"2026-01-01..2026-08-31"},
+  "selection_partition":"validation only",
+  "oos_used_for_selection":false,
+  "gate":{"validation_active_weeks_min":30,"oos_active_weeks_min":20,"validation_stress_return_min":0.0,"validation_sharpe_min":0.75,"validation_max_dd":0.30,"oos_stress_return_min":0.0,"oos_sharpe_min":0.50,"oos_max_dd":0.30,"oos_bootstrap_positive_min":0.70,"validation_distinct_symbols_min":12,"oos_distinct_symbols_min":8,"severe_oos_return_min":0.0},
+  "promotion_note":"historical pass grants research/shadow eligibility only; no Demo or LIVE authority"
+}
