@@ -23,13 +23,17 @@ jobs:
           pip install -e .
           pip install pytest ruff==0.12.12
       - name: Lint
-        run: ruff check --ignore E501,I001 src/crypto_scanner/bull_bear_regime_data.py src/crypto_scanner/run_bull_bear_regime_research.py tests/test_bull_bear_regime_research.py
+        run: ruff check --ignore E501,I001 src/crypto_scanner/bull_bear_regime_data.py src/crypto_scanner/run_bull_bear_regime_research.py src/crypto_scanner/bull_bear_side_diagnostic.py tests/test_bull_bear_regime_research.py
       - name: Unit tests
         run: pytest -q tests/test_bull_bear_regime_research.py
       - name: Frozen historical screen
         run: python -m crypto_scanner.run_bull_bear_regime_research | tee bull_bear_regime_v1.log
+      - name: Side attribution diagnostic
+        run: python -m crypto_scanner.bull_bear_side_diagnostic | tee bull_bear_side_v1.log
       - uses: actions/upload-artifact@v4
         with:
           name: crypto-bull-long-bear-short-v1
-          path: bull_bear_regime_v1.log
+          path: |
+            bull_bear_regime_v1.log
+            bull_bear_side_v1.log
           retention-days: 30
