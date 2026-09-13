@@ -1,0 +1,7 @@
+{
+  "schema_version": "CRYPTO_BULL_LONG_BEAR_SHORT_V1_FUNDING_ADDENDUM",
+  "frozen_before_simulation": true,
+  "base": "use actual realized funding return",
+  "stress_and_severe": "if funding return is beneficial multiply by 0.8; if detrimental multiply magnitude by 1.2",
+  "timestamp_rule": "include only funding timestamps entry_time < funding_time < next_daily_open_time"
+}
