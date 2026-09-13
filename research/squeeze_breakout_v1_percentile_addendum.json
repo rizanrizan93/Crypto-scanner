@@ -1,0 +1,8 @@
+{
+  "schema_version": "CRYPTO_SQUEEZE_BREAKOUT_V1_PERCENTILE_ADDENDUM",
+  "frozen_before_simulation": true,
+  "atr": "Wilder ATR14: seed with arithmetic mean of first 14 true ranges, then ATR_t=(13*ATR_{t-1}+TR_t)/14",
+  "compression_percentile": "sort exactly the previous 90 valid ATR14/close observations and use zero-based index floor(0.20*(N-1)); current signal bar is excluded",
+  "breakout_reference": "highest high / lowest low of exactly the previous 20 completed 4h bars; current signal bar excluded",
+  "expansion_reference": "signal candle true range divided by signal candle ATR14"
+}
