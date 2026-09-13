@@ -1,0 +1,12 @@
+{
+  "schema_version": "CRYPTO_QUARTER_HOUR_OFI_V1_PORTFOLIO_ADDENDUM",
+  "frozen_before_simulation": true,
+  "portfolio_accounting": "six equal symbol sleeves, each initialized at 1/6 portfolio equity; at most one open trade per symbol; each sleeve compounds only its own closed trades; portfolio equity is the sum of sleeve equities",
+  "gross_exposure_max": 1.0,
+  "signal_collision": "each symbol acts independently; no cross-symbol ranking after signal threshold",
+  "drawdown_measure": "combined realized sleeve equity at every trade exit event",
+  "sharpe_measure": "sqrt(365) times mean daily portfolio realized return divided by population std; zero-return days included",
+  "trade_count": "number of closed symbol trades",
+  "funding_and_costs": "applied inside each symbol sleeve before compounding",
+  "note": "addendum freezes accounting only; signal/candidates/gates remain unchanged from CRYPTO_QUARTER_HOUR_OFI_V1_FREEZE"
+}
