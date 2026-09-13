@@ -1,0 +1,63 @@
+name: Research Crypto Cost-Aware BTC XGBoost V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-cost-aware-btc-xgb-v1
+    paths:
+      - "src/crypto_scanner/btc_xgb_data.py"
+      - "src/crypto_scanner/btc_xgb_features.py"
+      - "src/crypto_scanner/run_btc_xgb_research.py"
+      - "tests/test_btc_xgb_research.py"
+      - "research/cost_aware_btc_xgb_v1_*.json"
+      - ".github/workflows/research-crypto-cost-aware-btc-xgb-v1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff==0.12.12 xgboost==3.0.5 scikit-learn==1.7.2
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/btc_xgb_data.py src/crypto_scanner/btc_xgb_features.py src/crypto_scanner/run_btc_xgb_research.py tests/test_btc_xgb_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_btc_xgb_research.py
+      - name: Frozen walk-forward screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.run_btc_xgb_research | tee btc_xgb_v1.log
+          tail -n 1 btc_xgb_v1.log > btc_xgb_v1.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('btc_xgb_v1.json').read_text())
+          assert d['schema_version']=='CRYPTO_COST_AWARE_BTC_XGB_V1'
+          assert d['research_only'] is True
+          assert d['execution_influence'] is False
+          assert d['live_execution_enabled'] is False
+          assert d['oos_used_for_selection'] is False
+          print('BTC_XGB_HISTORICAL_PASS',d['historical_pass'])
+          for r in d['rows']:
+              v=r['stress']['validation']; o=r['stress']['oos']; s=r['severe_25bps']['oos']
+              print('BTC_XGB_ROW',r['candidate'],'val_n=',v['closed_trades'],'val_ret=',v['total_return'],'val_sh=',v['annualized_sharpe'],'oos_n=',o['closed_trades'],'oos_ret=',o['total_return'],'oos_sh=',o['annualized_sharpe'],'oos_dd=',o['max_drawdown'],'oos_boot=',o['bootstrap_positive_fraction_200'],'severe25=',s['total_return'],'pass=',r['historical_pass'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-cost-aware-btc-xgb-v1
+          path: btc_xgb_v1.json
+          if-no-files-found: error
+          retention-days: 30
