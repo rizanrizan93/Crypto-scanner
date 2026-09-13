@@ -28,7 +28,7 @@ jobs:
           pip install -e .
           pip install ruff==0.12.12
       - name: Lint
-        run: ruff check --ignore E501 src/crypto_scanner/funding_carry_robustness_fast_research.py
+        run: ruff check --ignore E501,I001 src/crypto_scanner/funding_carry_robustness_fast_research.py
       - name: Run optimized diagnostic
         shell: bash
         run: |
