@@ -1,0 +1,30 @@
+{
+  "schema_version": "CRYPTO_FUNDING_CARRY_BETA_HEDGE_FORWARD_FREEZE_V1",
+  "frozen_at_utc": "2026-09-13T13:50:00Z",
+  "prospective_start_utc": "2026-09-14T00:00:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "auto_promotion_enabled": false,
+  "historical_v2_evidence_status": "DIAGNOSTIC_ONLY_POST_V1_DESIGN",
+  "candidate": {
+    "name": "FCR_BH_28D_TOP3_WEEKLY_BETA60",
+    "lookback_days": 28,
+    "top_k": 3,
+    "rebalance_days": 7,
+    "beta_market_proxy": "BTCUSDT",
+    "beta_window_days": 60,
+    "max_abs_raw_btc_hedge": 0.50,
+    "gross_exposure_target": 1.0,
+    "role": "PROSPECTIVE_BETA_HEDGED_CHALLENGER"
+  },
+  "cost_contract": {
+    "base_round_trip_bps": 8.0,
+    "stress_round_trip_bps": 14.0,
+    "stress_positive_funding_haircut": 0.20,
+    "stress_negative_funding_cost_multiplier": 1.20
+  },
+  "forward_gate_reference": "CRYPTO_FUNDING_CARRY_FORWARD_GATE_V1",
+  "forward_evidence_rule": "only returns with entry_day on or after 2026-09-14 may count; all 2023 through 2026-08 historical results are excluded from promotion evidence",
+  "production_or_live_promotion": "PROHIBITED"
+}
