@@ -49,7 +49,10 @@ def fetch_history(symbol: str):
                     continue
                 raise
     rows = sorted(rows, key=lambda row: row.start_time_ms)
-    if any(b.start_time_ms <= a.start_time_ms for a, b in zip(rows, rows[1:], strict=False)):
+    if any(
+        b.start_time_ms <= a.start_time_ms
+        for a, b in zip(rows, rows[1:], strict=False)
+    ):
         raise ValueError(f"non-increasing or duplicate history for {symbol}")
     return tuple(rows), unavailable
 
@@ -60,7 +63,9 @@ def _pass_gate(record: dict[str, object]) -> bool:
     train = stress["train"]
     validation = stress["validation"]
     oos = stress["oos"]
-    assert isinstance(train, dict) and isinstance(validation, dict) and isinstance(oos, dict)
+    assert isinstance(train, dict)
+    assert isinstance(validation, dict)
+    assert isinstance(oos, dict)
     return bool(
         int(train["days"]) >= 300
         and int(validation["days"]) >= 300
@@ -94,8 +99,14 @@ def build_report(history_by_symbol, unavailable_by_symbol):
         record = {
             "candidate": candidate.name,
             "parameters": candidate_payload(candidate),
-            "base": {name: summarize(rows, field="base_return") for name, rows in split.items()},
-            "stress": {name: summarize(rows, field="stress_return") for name, rows in split.items()},
+            "base": {
+                name: summarize(rows, field="base_return")
+                for name, rows in split.items()
+            },
+            "stress": {
+                name: summarize(rows, field="stress_return")
+                for name, rows in split.items()
+            },
         }
         record["historical_pass"] = _pass_gate(record)
         records.append(record)
@@ -129,9 +140,15 @@ def build_report(history_by_symbol, unavailable_by_symbol):
             "stress_round_trip_bps": STRESS_ROUND_TRIP_BPS,
             "base_carry_bps_per_day": BASE_CARRY_BPS_PER_DAY,
             "stress_carry_bps_per_day": STRESS_CARRY_BPS_PER_DAY,
-            "carry_note": "conservative funding/carry proxy; exact realized funding remains a forward-Demo gate",
+            "carry_note": (
+                "conservative funding/carry proxy; exact realized funding remains "
+                "a forward-Demo gate"
+            ),
         },
-        "bias_note": "fixed current 20-pair universe has survivorship bias; historical pass is bounded-Demo eligibility only",
+        "bias_note": (
+            "fixed current 20-pair universe has survivorship bias; historical pass "
+            "is bounded-Demo eligibility only"
+        ),
         "historical_gate": {
             "train_days_min": 300,
             "validation_days_min": 300,
@@ -146,7 +163,9 @@ def build_report(history_by_symbol, unavailable_by_symbol):
             "purpose": "bounded Demo/shadow eligibility only; never LIVE authority",
         },
         "unavailable_months": unavailable_by_symbol,
-        "historical_pass": [row["candidate"] for row in ranked if row["historical_pass"]],
+        "historical_pass": [
+            row["candidate"] for row in ranked if row["historical_pass"]
+        ],
         "validation_ranking": [row["candidate"] for row in ranked],
         "rows": ranked,
     }
