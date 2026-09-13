@@ -48,6 +48,11 @@ jobs:
         run: crypto-scanner-calibrate-demo-data
       - name: Analyze research factor attribution
         run: crypto-scanner-research-attribution
+      - name: Analyze actual execution costs
+        # Measures exchange commission, funding, and adverse entry slippage from
+        # eligible closed Demo trades. Learned costs remain observe-only until
+        # the minimum sample threshold is met; the scanner uses the 8 bps baseline gate.
+        run: crypto-scanner-cost-attribution
       - name: Heartbeat success
         if: success()
         continue-on-error: true
