@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
-import time
+import zipfile
 from datetime import UTC, datetime
+from math import isfinite
 
 import httpx
 
@@ -10,6 +13,7 @@ from crypto_scanner.binance_public_archive import (
     BinanceArchiveError,
     BinancePublicArchiveClient,
     make_monthly_package,
+    verify_archive,
 )
 from crypto_scanner.funding_carry_research import (
     FIXED_UNIVERSE,
@@ -28,11 +32,11 @@ END_YEAR = 2026
 END_MONTH = 8
 FUNDING_START = datetime(2023, 1, 1, tzinfo=UTC)
 FUNDING_END = datetime(2026, 9, 1, tzinfo=UTC)
-FUNDING_URL = "https://fapi.binance.com/fapi/v1/fundingRate"
+FUNDING_ARCHIVE_BASE = "https://data.binance.vision/data/futures/um/monthly/fundingRate"
 BASE_ROUND_TRIP_BPS = 8.0
 STRESS_ROUND_TRIP_BPS = 14.0
-REQUEST_TIMEOUT_SECONDS = 20.0
-FUNDING_PAGE_LIMIT = 1000
+REQUEST_TIMEOUT_SECONDS = 30.0
+MAX_FUNDING_ARCHIVE_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
 
 def _months():
@@ -65,70 +69,91 @@ def fetch_price_history(symbol: str):
     return tuple(rows), unavailable
 
 
-def fetch_funding_history(symbol: str) -> tuple[FundingPoint, ...]:
-    start_ms = int(FUNDING_START.timestamp() * 1000)
-    end_ms = int(FUNDING_END.timestamp() * 1000) - 1
-    points: list[FundingPoint] = []
+def _funding_archive_filename(symbol: str, year: int, month: int) -> str:
+    return f"{symbol}-fundingRate-{year:04d}-{month:02d}.zip"
 
+
+def _parse_funding_zip(payload: bytes) -> tuple[FundingPoint, ...]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = [item for item in archive.infolist() if not item.is_dir()]
+            if len(members) != 1:
+                raise RuntimeError("funding archive must contain exactly one data file")
+            member = members[0]
+            if member.file_size > MAX_FUNDING_ARCHIVE_UNCOMPRESSED_BYTES:
+                raise RuntimeError("funding archive exceeds uncompressed-size guard")
+            raw = archive.read(member).decode("utf-8")
+    except (zipfile.BadZipFile, UnicodeDecodeError) as exc:
+        raise RuntimeError("invalid funding archive") from exc
+
+    reader = csv.DictReader(io.StringIO(raw))
+    required = {"calc_time", "funding_interval_hours", "last_funding_rate"}
+    if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
+        raise RuntimeError("funding archive schema mismatch")
+
+    points: list[FundingPoint] = []
+    try:
+        for row in reader:
+            funding_time = int(row["calc_time"])
+            interval_hours = int(row["funding_interval_hours"])
+            funding_rate = float(row["last_funding_rate"])
+            if interval_hours <= 0 or not isfinite(funding_rate):
+                raise ValueError("invalid funding row")
+            stamp = datetime.fromtimestamp(funding_time / 1000, tz=UTC)
+            if not (FUNDING_START <= stamp < FUNDING_END):
+                continue
+            points.append(
+                FundingPoint(
+                    funding_time_ms=funding_time,
+                    funding_rate=funding_rate,
+                )
+            )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("funding archive contains invalid numeric data") from exc
+
+    points.sort(key=lambda point: point.funding_time_ms)
+    if any(
+        later.funding_time_ms <= earlier.funding_time_ms
+        for earlier, later in zip(points, points[1:], strict=False)
+    ):
+        raise RuntimeError("funding archive timestamps are not strictly increasing")
+    return tuple(points)
+
+
+def fetch_funding_history(symbol: str) -> tuple[tuple[FundingPoint, ...], list[str]]:
+    points: list[FundingPoint] = []
+    unavailable: list[str] = []
     headers = {"User-Agent": "crypto-scanner-research/1.0"}
     with httpx.Client(
         timeout=REQUEST_TIMEOUT_SECONDS,
         headers=headers,
         follow_redirects=False,
     ) as client:
-        cursor = start_ms
-        while cursor <= end_ms:
-            response = client.get(
-                FUNDING_URL,
-                params={
-                    "symbol": symbol,
-                    "startTime": cursor,
-                    "endTime": end_ms,
-                    "limit": FUNDING_PAGE_LIMIT,
-                },
-            )
-            if response.status_code != 200:
+        for year, month in _months():
+            filename = _funding_archive_filename(symbol, year, month)
+            url = f"{FUNDING_ARCHIVE_BASE}/{symbol}/{filename}"
+            data_response = client.get(url)
+            checksum_response = client.get(f"{url}.CHECKSUM")
+            if data_response.status_code == 404 and checksum_response.status_code == 404:
+                unavailable.append(f"{year:04d}-{month:02d}")
+                continue
+            if data_response.status_code != 200 or checksum_response.status_code != 200:
                 raise RuntimeError(
-                    f"BINANCE_FUNDING_HTTP_{response.status_code}:{symbol}"
+                    "BINANCE_VISION_FUNDING_FETCH_FAILED:"
+                    f"{symbol}:{year:04d}-{month:02d}:"
+                    f"data={data_response.status_code}:"
+                    f"checksum={checksum_response.status_code}"
                 )
-            payload = response.json()
-            if not isinstance(payload, list):
-                raise RuntimeError(f"BINANCE_FUNDING_INVALID_PAYLOAD:{symbol}")
-            if not payload:
-                break
+            verify_archive(data_response.content, checksum_response.text, filename)
+            points.extend(_parse_funding_zip(data_response.content))
 
-            page: list[FundingPoint] = []
-            for item in payload:
-                funding_time = int(item["fundingTime"])
-                funding_rate = float(item["fundingRate"])
-                if funding_time < cursor or funding_time > end_ms:
-                    continue
-                page.append(
-                    FundingPoint(
-                        funding_time_ms=funding_time,
-                        funding_rate=funding_rate,
-                    )
-                )
-            page.sort(key=lambda point: point.funding_time_ms)
-            if not page:
-                break
-            if any(
-                later.funding_time_ms <= earlier.funding_time_ms
-                for earlier, later in zip(page, page[1:], strict=False)
-            ):
-                raise RuntimeError(f"BINANCE_FUNDING_NON_INCREASING_PAGE:{symbol}")
-            if points and page[0].funding_time_ms <= points[-1].funding_time_ms:
-                raise RuntimeError(f"BINANCE_FUNDING_DUPLICATE_PAGE:{symbol}")
-            points.extend(page)
-            next_cursor = page[-1].funding_time_ms + 1
-            if next_cursor <= cursor:
-                raise RuntimeError(f"BINANCE_FUNDING_CURSOR_STALLED:{symbol}")
-            cursor = next_cursor
-            if len(payload) < FUNDING_PAGE_LIMIT:
-                break
-            time.sleep(0.05)
-
-    return tuple(points)
+    points.sort(key=lambda point: point.funding_time_ms)
+    if any(
+        later.funding_time_ms <= earlier.funding_time_ms
+        for earlier, later in zip(points, points[1:], strict=False)
+    ):
+        raise RuntimeError(f"BINANCE_VISION_FUNDING_DUPLICATE_HISTORY:{symbol}")
+    return tuple(points), unavailable
 
 
 def _pass_gate(record: dict[str, object]) -> bool:
@@ -159,7 +184,8 @@ def _pass_gate(record: dict[str, object]) -> bool:
 def build_report(
     price_history_by_symbol,
     funding_by_symbol,
-    unavailable_by_symbol,
+    unavailable_price_by_symbol,
+    unavailable_funding_by_symbol,
 ):
     daily = {
         symbol: candles_to_complete_utc_days(price_history_by_symbol[symbol])
@@ -205,8 +231,12 @@ def build_report(
         "execution_influence": False,
         "live_execution_enabled": False,
         "price_source": "BINANCE_PUBLIC_ARCHIVE_USDM_4H",
-        "funding_source": "BINANCE_USDM_PUBLIC_FAPI_FUNDING_RATE",
-        "funding_endpoint": "/fapi/v1/fundingRate",
+        "funding_source": "BINANCE_VISION_USDM_MONTHLY_FUNDING_RATE",
+        "funding_archive_path": (
+            "data/futures/um/monthly/fundingRate/{SYMBOL}/"
+            "{SYMBOL}-fundingRate-{YYYY-MM}.zip"
+        ),
+        "funding_integrity": "sibling .CHECKSUM SHA-256 required; fail closed",
         "universe_contract": "FIXED_20_PAIR_WITH_XLM_NO_FIL",
         "universe": list(FIXED_UNIVERSE),
         "selection_partition": "validation",
@@ -268,7 +298,8 @@ def build_report(
                     if not funding_by_symbol[symbol]
                     else funding_by_symbol[symbol][-1].timestamp.isoformat()
                 ),
-                "unavailable_price_months": unavailable_by_symbol[symbol],
+                "unavailable_price_months": unavailable_price_by_symbol[symbol],
+                "unavailable_funding_months": unavailable_funding_by_symbol[symbol],
             }
             for symbol in FIXED_UNIVERSE
         },
@@ -283,18 +314,27 @@ def build_report(
 def main() -> int:
     prices = {}
     funding = {}
-    unavailable = {}
+    unavailable_price = {}
+    unavailable_funding = {}
     for symbol in FIXED_UNIVERSE:
-        candles, missing = fetch_price_history(symbol)
+        candles, missing_price = fetch_price_history(symbol)
         prices[symbol] = candles
-        unavailable[symbol] = missing
-        points = fetch_funding_history(symbol)
+        unavailable_price[symbol] = missing_price
+        points, missing_funding = fetch_funding_history(symbol)
         funding[symbol] = points
+        unavailable_funding[symbol] = missing_funding
         print(
             f"FUNDING_COVERAGE {symbol} price_candles={len(candles)} "
-            f"funding_points={len(points)} missing_price_months={len(missing)}"
+            f"funding_points={len(points)} "
+            f"missing_price_months={len(missing_price)} "
+            f"missing_funding_months={len(missing_funding)}"
         )
-    report = build_report(prices, funding, unavailable)
+    report = build_report(
+        prices,
+        funding,
+        unavailable_price,
+        unavailable_funding,
+    )
     print(json.dumps(report, sort_keys=True, allow_nan=False))
     return 0
 
