@@ -1,0 +1,73 @@
+name: Research Crypto 20-Pair Tournament
+
+on:
+  push:
+    branches:
+      - research/crypto-20pair-walkforward-tournament
+    paths:
+      - "src/crypto_scanner/research_tournament.py"
+      - "src/crypto_scanner/historical_research.py"
+      - "src/crypto_scanner/binance_public_archive.py"
+      - "tests/test_research_tournament.py"
+      - ".github/workflows/research-crypto-20pair-tournament.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-20pair-tournament
+  cancel-in-progress: true
+
+jobs:
+  full-public-oos-tournament:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Run full 20-pair official-archive tournament
+        run: |
+          python -m crypto_scanner.research_tournament \
+            --interval 15m \
+            --start 2024-01 \
+            --train-through 2024-12 \
+            --validation-through 2025-12 \
+            --end 2026-08 \
+            --base-cost-bps 8 \
+            --stress-cost-bps 14 \
+            > crypto_20pair_tournament_15m.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("crypto_20pair_tournament_15m.json")
+          data = json.loads(p.read_text())
+          print("CRYPTO_TOURNAMENT_RANKING", data["ranking"])
+          for row in data["candidates"]:
+              name = row["candidate"]["name"]
+              base = row["partitions"]["base"]["periods"]["oos"]
+              stress = row["partitions"]["stress"]["periods"]["oos"]
+              print(
+                  "CRYPTO_TOURNAMENT_OOS",
+                  name,
+                  "trades=", base["summary"]["sample_size"],
+                  "avg_net_r=", base["summary"]["average_net_r"],
+                  "stress_avg_net_r=", stress["summary"]["average_net_r"],
+                  "pf=", base["summary"]["profit_factor_r"],
+                  "max_dd_r=", base["summary"]["max_drawdown_r"],
+                  "positive_breadth=", base["breadth"]["positive_fraction"],
+              )
+          PY
+      - name: Upload immutable research evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-20pair-tournament-15m
+          path: crypto_20pair_tournament_15m.json
+          if-no-files-found: error
