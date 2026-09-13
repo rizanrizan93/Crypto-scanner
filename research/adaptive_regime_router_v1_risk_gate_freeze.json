@@ -1,0 +1,11 @@
+{
+  "schema_version": "CRYPTO_ADAPTIVE_REGIME_ROUTER_V1_RISK_GATE_FREEZE",
+  "research_only": true,
+  "risk": {"stop_atr":1.5,"target_atr":3.0,"max_hold_h4_bars":12,"same_bar_collision":"STOP_FIRST","one_position_per_symbol":true},
+  "costs_bps_round_trip": {"base":8.0,"stress":14.0,"severe":25.0},
+  "funding_stress": "benefit x0.8; adverse funding x1.2",
+  "periods": {"warmup":"2023","train":"2024","validation":"2025","oos":"2026-01-01..2026-08-31"},
+  "selection_partition": "validation only",
+  "oos_used_for_selection": false,
+  "gate": {"validation_trades_min":120,"oos_trades_min":70,"validation_long_min":25,"validation_short_min":25,"oos_long_min":15,"oos_short_min":15,"validation_expectancy_r_min":0.05,"validation_pf_min":1.10,"validation_max_dd_r":25.0,"oos_expectancy_r_min":0.03,"oos_pf_min":1.05,"oos_max_dd_r":20.0,"oos_bootstrap_positive_min":0.70,"validation_eligible_symbols_min":10,"validation_positive_symbols_min":6,"oos_eligible_symbols_min":8,"oos_positive_symbols_min":5,"severe_oos_expectancy_r_min":0.0}
+}
