@@ -1,0 +1,43 @@
+name: Research Crypto Funding Carry Beta Hedge V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-funding-carry-v1
+    paths:
+      - "src/crypto_scanner/funding_carry_beta_hedge_research.py"
+      - ".github/workflows/research-crypto-funding-carry-beta-hedge-v2.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  beta-hedge-screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install ruff==0.12.12
+      - name: Lint
+        run: ruff check src/crypto_scanner/funding_carry_beta_hedge_research.py
+      - name: Run frozen V2 diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.funding_carry_beta_hedge_research | tee crypto_funding_carry_beta_hedge_v2.log
+          tail -n 1 crypto_funding_carry_beta_hedge_v2.log > crypto_funding_carry_beta_hedge_v2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-funding-carry-beta-hedge-v2
+          path: crypto_funding_carry_beta_hedge_v2.json
+          if-no-files-found: error
+          retention-days: 30
