@@ -28,7 +28,7 @@ DEFAULT_UNIVERSE = (
     "AAVEUSDT",
     "NEARUSDT",
     "ETCUSDT",
-    "FILUSDT",
+    "XLMUSDT",
     "ATOMUSDT",
 )
 
