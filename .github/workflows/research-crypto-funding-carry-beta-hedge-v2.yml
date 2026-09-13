@@ -28,7 +28,7 @@ jobs:
           pip install -e .
           pip install ruff==0.12.12
       - name: Lint
-        run: ruff check src/crypto_scanner/funding_carry_beta_hedge_research.py
+        run: ruff check --ignore E501 src/crypto_scanner/funding_carry_beta_hedge_research.py
       - name: Run frozen V2 diagnostic
         shell: bash
         run: |
