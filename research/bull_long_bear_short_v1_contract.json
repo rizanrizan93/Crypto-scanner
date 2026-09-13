@@ -1,0 +1,52 @@
+{
+  "schema_version": "CRYPTO_BULL_LONG_BEAR_SHORT_V1_FREEZE",
+  "frozen_at_utc": "2026-09-13T16:38:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "symbol": "BTCUSDT",
+  "source": "BINANCE_VISION_USDM_MONTHLY_KLINES_1D_PLUS_MONTHLY_FUNDING",
+  "signal": {
+    "bull": "completed D1 close > causal EMA200 and 60D close-to-close return > 0",
+    "bear": "completed D1 close < causal EMA200 and 60D close-to-close return < 0",
+    "neutral": "all other states"
+  },
+  "position": {
+    "bull": "LONG 1.0x BTCUSDT perpetual notional",
+    "bear": "SHORT 1.0x BTCUSDT perpetual notional",
+    "neutral": "FLAT"
+  },
+  "entry_execution": "position for day t+1 is determined only after day t close and entered/rebalanced at next D1 open",
+  "rebalancing": "hold existing side while regime unchanged; pay trading cost only when absolute exposure changes, including LONG<->SHORT switch as two one-way legs",
+  "stop_loss": "none; this is a pure regime-following benchmark",
+  "take_profit": "none; exit or reverse only when completed D1 regime changes",
+  "ema200": "recursive EMA alpha=2/(200+1), adjust=False semantics, requiring 200 completed closes before first valid signal",
+  "momentum60": "close_t/close_{t-60}-1 using completed D1 closes",
+  "funding": "actual funding timestamps strictly inside each held open-to-open interval; LONG pays positive funding / receives negative; SHORT receives positive / pays negative",
+  "costs_bps_round_trip_equivalent": {"base": 8.0, "stress": 14.0, "severe": 25.0},
+  "cost_accounting": "half the stated round-trip cost per unit change in absolute signed exposure: flat->long/short one half, long/short->flat one half, long<->short full round-trip equivalent",
+  "history": {
+    "warmup_and_train": "2020-01-01..2024-12-31",
+    "validation": "2025-01-01..2025-12-31",
+    "untouched_oos": "2026-01-01..2026-08-31"
+  },
+  "selection_partition": "validation only",
+  "oos_used_for_selection": false,
+  "historical_gate": {
+    "validation_exposure_days_min": 180,
+    "oos_exposure_days_min": 120,
+    "validation_long_days_min": 30,
+    "validation_short_days_min": 30,
+    "oos_long_days_min": 20,
+    "oos_short_days_min": 20,
+    "validation_stress_total_return_min": 0.0,
+    "validation_stress_sharpe_min": 0.75,
+    "validation_stress_max_drawdown_max": 0.35,
+    "oos_stress_total_return_min": 0.0,
+    "oos_stress_sharpe_min": 0.50,
+    "oos_stress_max_drawdown_max": 0.35,
+    "oos_bootstrap_positive_min": 0.70,
+    "severe_25bps_oos_total_return_min": 0.0
+  },
+  "promotion_note": "historical pass means research/shadow eligible only; no demo/live order authority"
+}
