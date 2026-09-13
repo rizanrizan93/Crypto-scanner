@@ -78,7 +78,11 @@ def _planned_entries(
         for row in _fetch_json_list(
             config,
             "signal_geometry",
-            {"select": "signal_id,entry_price", "signal_id": _in_filter(chunk), "limit": "100"},
+            {
+                "select": "signal_id,entry_price",
+                "signal_id": _in_filter(chunk),
+                "limit": "100",
+            },
         ):
             if not isinstance(row, dict):
                 raise PersistenceError("cost-attribution geometry payload is invalid")
@@ -226,7 +230,14 @@ def run_cost_attribution() -> dict[str, object]:
     with SupabaseRestClient(config) as rest:
         rest.upsert(
             "runtime_state",
-            ({"state_key": COST_ATTRIBUTION_STATE_KEY, "version": 1, "state": state, "updated_at_ms": now_ms},),
+            (
+                {
+                    "state_key": COST_ATTRIBUTION_STATE_KEY,
+                    "version": 1,
+                    "state": state,
+                    "updated_at_ms": now_ms,
+                },
+            ),
             on_conflict=("state_key",),
         )
     return {
