@@ -1,0 +1,11 @@
+{
+  "schema_version": "CRYPTO_COST_AWARE_BTC_XGB_V1_ACCOUNTING_ADDENDUM",
+  "frozen_before_simulation": true,
+  "portfolio": "single BTC sleeve, gross exposure 1.0 when active and 0 when NO_TRADE; closed-trade returns compound sequentially",
+  "daily_return": "realized equity change by UTC exit day; zero-return days included",
+  "sharpe": "sqrt(365)*mean(daily_return)/population_std(daily_return)",
+  "drawdown": "peak-to-trough compounded realized equity",
+  "bootstrap": "200 trials, 14-day circular blocks over daily realized returns; report fraction with compounded return >0",
+  "costs": "round-trip bps deducted once per closed trade",
+  "funding": "sum only funding timestamps strictly inside entry<timestamp<exit; benefit x0.8 and cost x1.2 under stress/severe"
+}
