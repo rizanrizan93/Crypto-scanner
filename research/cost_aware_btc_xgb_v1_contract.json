@@ -1,0 +1,68 @@
+{
+  "schema_version": "CRYPTO_COST_AWARE_BTC_XGB_V1_FREEZE",
+  "frozen_at_utc": "2026-09-13T16:25:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "symbol": "BTCUSDT",
+  "source": "BINANCE_VISION_USDM_MONTHLY_KLINES_1H_PLUS_MONTHLY_FUNDING",
+  "target": "next 4-hour open-to-open BTCUSDT return; model fitted only on samples whose full target horizon is complete before retrain cutoff",
+  "entry": "next 1h open after completed signal bar",
+  "holding_period_hours": 4,
+  "overlap_policy": "one position at a time; skip signals while a position is open",
+  "directions": "LONG if predicted 4h return >= threshold; SHORT if predicted 4h return <= -threshold; otherwise NO_TRADE",
+  "features": [
+    "return_1h", "return_3h", "return_6h", "return_12h", "return_24h", "return_72h",
+    "realized_vol_24h", "realized_vol_72h", "atr_24h_over_close",
+    "ema12_over_ema48_minus1", "rsi14_scaled",
+    "volume_z24", "volume_z168", "taker_imbalance_1h", "taker_imbalance_6h",
+    "funding_last", "funding_mean_24h"
+  ],
+  "feature_policy": "all features use completed information at signal close; no current/future target information",
+  "model": {
+    "library": "xgboost",
+    "objective": "reg:squarederror",
+    "n_estimators": 300,
+    "max_depth": 3,
+    "learning_rate": 0.03,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 20,
+    "reg_lambda": 5.0,
+    "reg_alpha": 0.1,
+    "random_state": 20260913,
+    "n_jobs": 2
+  },
+  "retraining": "monthly expanding walk-forward; initial training begins with available 2020-2023 history; every monthly model may use only samples with complete targets ending before that month",
+  "candidates": [
+    {"name": "BTC_XGB_H4_COST21", "forecast_abs_threshold_bps": 21.0},
+    {"name": "BTC_XGB_H4_COST38", "forecast_abs_threshold_bps": 38.0}
+  ],
+  "threshold_rationale": "21 bps = 1.5x 14bps stress round-trip cost; 38 bps approximates 1.5x 25bps severe round-trip cost rounded up",
+  "costs_bps_round_trip": {"base": 8.0, "stress": 14.0, "severe": 25.0},
+  "funding": "actual funding strictly between entry and exit; positive benefit haircut 20% under stress/severe, negative funding cost magnified 20%",
+  "partitions": {
+    "model_history": "2020-01-01..2024-12-31 for validation-era expanding fits subject to data availability",
+    "validation": "2025-01-01..2025-12-31",
+    "untouched_oos": "2026-01-01..2026-08-31"
+  },
+  "selection_partition": "validation only",
+  "oos_used_for_selection": false,
+  "historical_gate": {
+    "validation_closed_trades_min": 80,
+    "oos_closed_trades_min": 50,
+    "validation_long_min": 20,
+    "validation_short_min": 20,
+    "oos_long_min": 12,
+    "oos_short_min": 12,
+    "validation_stress_total_return_min": 0.0,
+    "validation_stress_sharpe_min": 0.75,
+    "validation_stress_max_dd": 0.25,
+    "oos_stress_total_return_min": 0.0,
+    "oos_stress_sharpe_min": 0.50,
+    "oos_stress_max_dd": 0.25,
+    "oos_bootstrap_positive_min": 0.70,
+    "severe_25bps_oos_total_return_min": 0.0
+  },
+  "promotion_note": "historical pass grants research/shadow eligibility only; never Demo order authority without new prospective evidence"
+}
