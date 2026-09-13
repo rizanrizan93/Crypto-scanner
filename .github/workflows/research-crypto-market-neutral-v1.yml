@@ -1,0 +1,90 @@
+name: Research Crypto Market Neutral V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-market-neutral-relative-value-v1
+    paths:
+      - "src/crypto_scanner/market_neutral_research.py"
+      - "src/crypto_scanner/run_market_neutral_research.py"
+      - "tests/test_market_neutral_research.py"
+      - ".github/workflows/research-crypto-market-neutral-v1.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-market-neutral-v1
+  cancel-in-progress: true
+
+jobs:
+  historical-screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest==8.4.2 ruff==0.12.12
+      - name: Lint frozen research files
+        run: |
+          ruff check src/crypto_scanner/market_neutral_research.py \
+            src/crypto_scanner/run_market_neutral_research.py \
+            tests/test_market_neutral_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_market_neutral_research.py
+      - name: Run official-archive market-neutral historical screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.run_market_neutral_research | tee crypto_market_neutral_v1.json
+      - name: Print immutable evidence
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("crypto_market_neutral_v1.json").read_text())
+          assert data["schema_version"] == "CRYPTO_MARKET_NEUTRAL_RELATIVE_VALUE_V1"
+          assert data["research_only"] is True
+          assert data["execution_influence"] is False
+          assert data["live_execution_enabled"] is False
+          assert data["universe_contract"] == "FIXED_20_PAIR_WITH_XLM_NO_FIL"
+          assert len(data["universe"]) == 20
+          assert "XLMUSDT" in data["universe"]
+          assert "FILUSDT" not in data["universe"]
+          assert data["oos_used_for_selection"] is False
+          assert data["portfolio_contract"]["gross_exposure_target"] == 1.0
+          assert data["portfolio_contract"]["net_exposure_target"] == 0.0
+          print("CRYPTO_MNV_HISTORICAL_PASS", data["historical_pass"])
+          for row in data["rows"]:
+              validation = row["stress"]["validation"]
+              oos = row["stress"]["oos"]
+              print(
+                  "CRYPTO_MNV_ROW",
+                  row["candidate"],
+                  "validation_return=", validation["total_return"],
+                  "validation_sharpe=", validation["annualized_sharpe"],
+                  "validation_dd=", validation["max_drawdown"],
+                  "validation_gross=", validation["avg_gross_exposure"],
+                  "oos_return=", oos["total_return"],
+                  "oos_sharpe=", oos["annualized_sharpe"],
+                  "oos_dd=", oos["max_drawdown"],
+                  "oos_gross=", oos["avg_gross_exposure"],
+                  "oos_bootstrap=", oos["bootstrap_positive_fraction_200"],
+                  "pass=", row["historical_pass"],
+              )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-market-neutral-v1
+          path: crypto_market_neutral_v1.json
+          if-no-files-found: error
+          retention-days: 30
