@@ -1,0 +1,52 @@
+name: Research Crypto Regime 8W Reversal V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [research/crypto-regime-8w-reversal-v1]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -e .
+          pip install pytest ruff==0.12.12
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/regime_8w_reversal_core.py src/crypto_scanner/run_regime_8w_reversal_research.py tests/test_regime_8w_reversal_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_regime_8w_reversal_research.py
+      - name: Frozen historical screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.run_regime_8w_reversal_research | tee regime_8w_reversal_v1.log
+          tail -n 1 regime_8w_reversal_v1.log > regime_8w_reversal_v1.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('regime_8w_reversal_v1.json').read_text())
+          assert d['schema_version']=='CRYPTO_REGIME_8W_REVERSAL_V1'
+          assert d['research_only'] is True
+          assert d['execution_influence'] is False
+          assert d['live_execution_enabled'] is False
+          assert d['oos_used_for_selection'] is False
+          r=d['rows'][0]; v=r['stress']['validation']; o=r['stress']['oos']; s=r['severe_25bps']['oos']
+          print('R8W_HISTORICAL_PASS',d['historical_pass'])
+          print('R8W_ROW','val_weeks=',v['active_weeks'],'val_ret=',v['total_return'],'val_sh=',v['annualized_sharpe'],'val_bull=',v['bull_return'],'val_bear=',v['bear_return'],'oos_weeks=',o['active_weeks'],'oos_ret=',o['total_return'],'oos_sh=',o['annualized_sharpe'],'oos_dd=',o['max_drawdown'],'oos_boot=',o['bootstrap_positive_fraction_200'],'oos_bull=',o['bull_return'],'oos_bear=',o['bear_return'],'severe25=',s['total_return'],'pass=',r['historical_pass'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-regime-8w-reversal-v1
+          path: regime_8w_reversal_v1.json
+          if-no-files-found: error
+          retention-days: 30
