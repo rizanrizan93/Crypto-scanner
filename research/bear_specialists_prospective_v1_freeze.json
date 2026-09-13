@@ -1,0 +1,24 @@
+{
+  "schema_version":"CRYPTO_BEAR_SPECIALISTS_PROSPECTIVE_V1_FREEZE",
+  "frozen_at_utc":"2026-09-13T17:10:00Z",
+  "forward_start_utc":"2026-09-14T00:00:00Z",
+  "research_only":true,
+  "post_oos_hypothesis":true,
+  "historical_metrics_are_not_promotion_evidence":true,
+  "execution_influence":false,
+  "demo_order_authority":false,
+  "live_execution_enabled":false,
+  "regime":"BTC completed D1 close < causal EMA200 AND BTC 60D return < 0 = BEAR; otherwise CASH for this specialist test",
+  "schedule":"completed Monday UTC D1 signal, enter next Tuesday 00:00 UTC open, hold exactly 7 days",
+  "candidates":[
+    {"name":"BEAR_SHORT_LAGGARD_28D_BOTTOM3","ranking":"28D return","selection":"SHORT bottom 3 weakest"},
+    {"name":"BEAR_SHORT_RALLY_7D_TOP3","ranking":"7D return","selection":"SHORT top 3 strongest"},
+    {"name":"BEAR_SHORT_WINNER_56D_TOP3","ranking":"56D return","selection":"SHORT top 3 strongest"}
+  ],
+  "weights":"equal one-third, gross exposure 1.0 only in BEAR regime",
+  "costs_bps_round_trip":{"base":8.0,"stress":14.0,"severe":25.0},
+  "funding":"actual funding strictly entry<timestamp<exit; stress/severe benefit x0.8 and adverse x1.2",
+  "prospective_gate":{"calendar_days_min":120,"active_bear_weeks_min":20,"stress_total_return_min":0.0,"stress_sharpe_min":0.75,"stress_max_drawdown_max":0.20,"bootstrap_positive_min":0.70,"severe_25bps_total_return_min":0.0,"distinct_selected_symbols_min":8,"max_single_symbol_selection_share":0.35,"positive_month_fraction_min":0.60},
+  "selection_policy":"no candidate may be selected or promoted from pre-freeze history; compare only observations at or after forward_start_utc",
+  "promotion_ceiling":"READY_FOR_LIMITED_SHADOW_EXPERIMENT only; never automatic order authority"
+}
