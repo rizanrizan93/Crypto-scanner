@@ -1,0 +1,44 @@
+name: Research Crypto Funding Forward Source Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-funding-carry-v1
+    paths:
+      - ".github/workflows/research-crypto-funding-forward-source-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  source-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Binance Vision daily funding archive
+        run: |
+          python - <<'PY'
+          import csv, hashlib, io, urllib.request, zipfile
+          symbol = "BTCUSDT"
+          day = "2026-09-11"
+          filename = f"{symbol}-fundingRate-{day}.zip"
+          url = f"https://data.binance.vision/data/futures/um/daily/fundingRate/{symbol}/{filename}"
+          payload = urllib.request.urlopen(url, timeout=30).read()
+          checksum = urllib.request.urlopen(url + ".CHECKSUM", timeout=30).read().decode().strip().split()[0]
+          assert hashlib.sha256(payload).hexdigest() == checksum
+          with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+              members = [x for x in zf.infolist() if not x.is_dir()]
+              assert len(members) == 1
+              text = zf.read(members[0]).decode()
+          reader = csv.DictReader(io.StringIO(text))
+          required = {"calc_time", "funding_interval_hours", "last_funding_rate"}
+          assert reader.fieldnames is not None and required.issubset(reader.fieldnames)
+          rows = list(reader)
+          assert rows
+          print("DAILY_FUNDING_SOURCE_PASS", symbol, day, "rows=", len(rows))
+          PY
