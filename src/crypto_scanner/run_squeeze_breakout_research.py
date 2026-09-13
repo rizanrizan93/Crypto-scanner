@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from random import Random
 from statistics import mean
 
-from crypto_scanner.run_funding_carry_research import fetch_funding_history, fetch_price_history
+from crypto_scanner.squeeze_archive_data import fetch_funding_history, fetch_price_history
 from crypto_scanner.squeeze_breakout_engine import Result, simulate_symbol
 from crypto_scanner.squeeze_breakout_signal import UNIVERSE, build_setups
 
