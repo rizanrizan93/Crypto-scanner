@@ -1,0 +1,9 @@
+Frozen before simulation.
+Entry: exact next H4 open after a completed signal candle.
+LONG stop=entry-1.5*signal_ATR14; target=entry+3.0*signal_ATR14.
+SHORT stop=entry+1.5*signal_ATR14; target=entry-3.0*signal_ATR14.
+Max hold=12 H4 bars; otherwise exit at close of 12th held bar.
+If stop and target both touch in one H4 candle, STOP_FIRST.
+Funding timestamps counted only when entry_time < funding_time < exit_event_time; stop/target exit_event_time is the end of the triggering H4 candle.
+1R is absolute entry-to-stop distance; costs and funding are converted to R by dividing notional return by stop-distance return.
+Bootstrap: 200 circular block trials over closed-trade net R, block length 20 trades.
