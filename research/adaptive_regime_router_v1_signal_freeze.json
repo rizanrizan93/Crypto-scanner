@@ -1,0 +1,14 @@
+{
+  "schema_version": "CRYPTO_ADAPTIVE_REGIME_ROUTER_V1_SIGNAL_FREEZE",
+  "research_only": true,
+  "frozen_at_utc": "2026-09-13T16:43:00Z",
+  "universe": ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","DOTUSDT","LTCUSDT","BCHUSDT","TRXUSDT","SUIUSDT","AAVEUSDT","UNIUSDT","ETCUSDT","NEARUSDT","ATOMUSDT","XLMUSDT"],
+  "source": "Binance Vision USD-M monthly D1/H4 klines plus funding",
+  "bull_regime": "BTC completed D1 close > causal EMA200 and BTC 60D return > 0",
+  "bear_regime": "BTC completed D1 close < causal EMA200 and BTC 60D return < 0",
+  "flat_regime": "otherwise no trade",
+  "long_entry": "bull regime, symbol H4 EMA20>EMA50, signal low<=EMA20, close>EMA20, close>open",
+  "short_entry": "bear regime, symbol H4 EMA20<EMA50, signal high>=EMA20, close<EMA20, close<open",
+  "entry_time": "next exact H4 open",
+  "causality": "latest completed BTC D1 only"
+}
