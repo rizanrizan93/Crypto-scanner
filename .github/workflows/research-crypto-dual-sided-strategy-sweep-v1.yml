@@ -1,0 +1,57 @@
+name: Research Crypto Dual-Sided Strategy Sweep V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-dual-sided-strategy-sweep-v1
+    paths:
+      - "src/crypto_scanner/dual_sided_strategy_sweep_v1.py"
+      - ".github/workflows/research-crypto-dual-sided-strategy-sweep-v1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install ruff==0.12.12
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/dual_sided_strategy_sweep_v1.py
+      - name: Run frozen long-short sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.dual_sided_strategy_sweep_v1 | tee crypto_dual_sided_strategy_sweep_v1.log
+          tail -n 1 crypto_dual_sided_strategy_sweep_v1.log > crypto_dual_sided_strategy_sweep_v1.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('crypto_dual_sided_strategy_sweep_v1.json').read_text())
+          assert d['schema_version']=='CRYPTO_DUAL_SIDED_STRATEGY_SWEEP_V1'
+          assert d['research_only'] is True
+          assert d['execution_influence'] is False
+          assert d['live_execution_enabled'] is False
+          assert d['oos_used_for_selection'] is False
+          print('DUAL_SIDED_HISTORICAL_PASS', d['historical_pass'])
+          for r in d['rows']:
+              v=r['stress']['validation']; o=r['stress']['oos']; s=r['severe_25bps']['oos']
+              print('DUAL_SIDED_ROW', r['candidate'], 'val_ret=',v['total_return'],'val_sh=',v['annualized_sharpe'],'oos_ret=',o['total_return'],'oos_sh=',o['annualized_sharpe'],'oos_dd=',o['max_drawdown'],'oos_boot=',o['bootstrap_positive_fraction_200'],'severe25_oos=',s['total_return'],'pass=',r['historical_pass'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-dual-sided-strategy-sweep-v1
+          path: crypto_dual_sided_strategy_sweep_v1.json
+          if-no-files-found: error
+          retention-days: 30
