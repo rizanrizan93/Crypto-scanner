@@ -1,0 +1,13 @@
+{
+  "schema_version": "CRYPTO_QUARTER_HOUR_OFI_V1_DATA_ADDENDUM",
+  "frozen_before_simulation": true,
+  "archive_start": "2023-12-01T00:00:00Z",
+  "archive_end": "2026-09-01T00:00:00Z",
+  "evaluation_start": "2024-01-01T00:00:00Z",
+  "rolling_window_days": 28,
+  "expected_quarter_hour_observations": 2688,
+  "minimum_history_fraction": 0.90,
+  "minimum_history_observations": 2420,
+  "timestamp_policy": "UTC only; completed signal candle; exact next-minute open required for entry and exact hold-horizon open required for exit; missing exact prices cause signal skip",
+  "integrity": "Binance Vision sibling .CHECKSUM SHA-256 required for every archive; fail closed on malformed schema or duplicate timestamps"
+}
