@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import httpx
@@ -10,6 +11,7 @@ import httpx
 from crypto_scanner.binance_public_archive import verify_archive
 
 BASE = "https://data.binance.vision/data/futures/um/monthly"
+WORKERS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,33 +97,47 @@ def _parse_funding(payload: bytes) -> list[FundingPoint]:
     return output
 
 
+def _fetch_month(year: int, month: int):
+    label = f"{year:04d}-{month:02d}"
+    headers = {"User-Agent": "crypto-scanner-research/1.0"}
+    with httpx.Client(timeout=45.0, headers=headers, follow_redirects=False) as client:
+        price_name = f"BTCUSDT-1d-{label}.zip"
+        price_url = f"{BASE}/klines/BTCUSDT/1d/{price_name}"
+        price_payload = _get_verified(client, price_url, price_name)
+
+        funding_name = f"BTCUSDT-fundingRate-{label}.zip"
+        funding_url = f"{BASE}/fundingRate/BTCUSDT/{funding_name}"
+        funding_payload = _get_verified(client, funding_url, funding_name)
+
+    return (
+        label,
+        [] if price_payload is None else _parse_daily(price_payload),
+        [] if funding_payload is None else _parse_funding(funding_payload),
+        price_payload is None,
+        funding_payload is None,
+    )
+
+
 def load_history() -> tuple[tuple[DailyBar, ...], tuple[FundingPoint, ...], list[str], list[str]]:
     bars: list[DailyBar] = []
     funding: list[FundingPoint] = []
     missing_price: list[str] = []
     missing_funding: list[str] = []
-    headers = {"User-Agent": "crypto-scanner-research/1.0"}
-    with httpx.Client(timeout=45.0, headers=headers, follow_redirects=False) as client:
-        for year, month in _months():
-            label = f"{year:04d}-{month:02d}"
-            price_name = f"BTCUSDT-1d-{label}.zip"
-            price_url = f"{BASE}/klines/BTCUSDT/1d/{price_name}"
-            price_payload = _get_verified(client, price_url, price_name)
-            if price_payload is None:
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = [pool.submit(_fetch_month, year, month) for year, month in _months()]
+        for future in as_completed(futures):
+            label, month_bars, month_funding, price_missing, funding_missing = future.result()
+            bars.extend(month_bars)
+            funding.extend(month_funding)
+            if price_missing:
                 missing_price.append(label)
-            else:
-                bars.extend(_parse_daily(price_payload))
-
-            funding_name = f"BTCUSDT-fundingRate-{label}.zip"
-            funding_url = f"{BASE}/fundingRate/BTCUSDT/{funding_name}"
-            funding_payload = _get_verified(client, funding_url, funding_name)
-            if funding_payload is None:
+            if funding_missing:
                 missing_funding.append(label)
-            else:
-                funding.extend(_parse_funding(funding_payload))
 
     bars.sort(key=lambda row: row.start_time_ms)
     funding.sort(key=lambda row: row.time_ms)
+    missing_price.sort()
+    missing_funding.sort()
     if any(b.start_time_ms <= a.start_time_ms for a, b in zip(bars, bars[1:], strict=False)):
         raise RuntimeError("daily history timestamps are not strictly increasing")
     if any(b.time_ms <= a.time_ms for a, b in zip(funding, funding[1:], strict=False)):
