@@ -1,0 +1,7 @@
+Frozen before simulation.
+EMA20/EMA50/EMA200: recursive EMA, alpha=2/(span+1), initialized from first available close.
+BTC momentum60: completed D1 close / close 60 daily bars earlier - 1.
+ATR14: Wilder ATR14 seeded by mean of first 14 true ranges.
+BTC D1 regime becomes usable only at D1 start + 24h.
+H4 signal is usable only at H4 start + 4h.
+Require exact D1/H4 continuity across required lookback and holding windows.
