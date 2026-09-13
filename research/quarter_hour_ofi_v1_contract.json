@@ -1,0 +1,39 @@
+{
+  "schema_version": "CRYPTO_QUARTER_HOUR_OFI_V1_FREEZE",
+  "frozen_at_utc": "2026-09-13T15:42:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "universe": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"],
+  "source": "BINANCE_VISION_USDM_MONTHLY_KLINES_1M",
+  "signal_clock_minutes": [0, 15, 30, 45],
+  "signal_definition": "signed_taker_imbalance=(2*taker_buy_quote_volume-quote_volume)/quote_volume on completed quarter-hour opening 1m candle",
+  "normalization": "causal rolling z-score over previous 28 calendar days of quarter-hour observations for the same symbol; current observation excluded",
+  "entry": "next 1m open after signal candle closes",
+  "directions": "LONG when z>=1.5; SHORT when z<=-1.5; otherwise NO_TRADE",
+  "one_position_per_symbol": true,
+  "overlap_policy": "skip new signal while symbol position remains open",
+  "candidates": [
+    {"name": "QH_OFI_Z1P5_H4", "hold_hours": 4},
+    {"name": "QH_OFI_Z1P5_H8", "hold_hours": 8},
+    {"name": "QH_OFI_Z1P5_H12", "hold_hours": 12}
+  ],
+  "costs_bps_round_trip": {"base": 8.0, "stress": 14.0, "severe": 25.0},
+  "funding": "realized funding strictly between entry and exit; positive benefit haircut 20% under stress/severe and negative funding cost magnified 20%",
+  "period": {"warmup": "2023", "train": "2024", "validation": "2025", "oos": "2026-01-01..2026-08-31"},
+  "selection_partition": "validation only",
+  "oos_used_for_selection": false,
+  "historical_gate": {
+    "validation_net_return_min": 0.0,
+    "validation_sharpe_min": 0.75,
+    "validation_max_drawdown_max": 0.30,
+    "oos_net_return_min": 0.0,
+    "oos_sharpe_min": 0.50,
+    "oos_max_drawdown_max": 0.30,
+    "oos_block_bootstrap_positive_min": 0.70,
+    "severe_25bps_oos_net_return_min": 0.0,
+    "minimum_validation_closed_trades": 150,
+    "minimum_oos_closed_trades": 100
+  },
+  "promotion_note": "historical pass grants research/shadow eligibility only; never order authority"
+}
