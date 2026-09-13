@@ -1,0 +1,65 @@
+{
+  "schema_version": "CRYPTO_FUNDING_CARRY_FORWARD_FREEZE_V1",
+  "frozen_at_utc": "2026-09-13T13:40:00Z",
+  "prospective_start_utc": "2026-09-14T00:00:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "auto_promotion_enabled": false,
+  "historical_gate_passed": false,
+  "historical_gate_result": [],
+  "source_contract": {
+    "price": "BINANCE_PUBLIC_ARCHIVE_USDM_4H",
+    "funding": "BINANCE_VISION_USDM_MONTHLY_FUNDING_RATE",
+    "integrity": "sibling .CHECKSUM SHA-256 required; fail closed",
+    "forward_evaluation": "delayed prospective evaluation after official monthly archives become available; no backfill before prospective_start_utc may count as forward evidence"
+  },
+  "universe_contract": "FIXED_20_PAIR_WITH_XLM_NO_FIL",
+  "portfolio_contract": {
+    "gross_exposure_target": 1.0,
+    "net_exposure_target": 0.0,
+    "entry": "next UTC day open after funding ranking signal",
+    "exit_mark": "next UTC day open",
+    "funding_realization": "only funding timestamps strictly inside entry<time<exit",
+    "stress_round_trip_bps": 14.0,
+    "stress_positive_funding_haircut": 0.20,
+    "stress_negative_funding_cost_multiplier": 1.20
+  },
+  "candidates": [
+    {
+      "name": "FCR_14D_TOP3_3DAY",
+      "lookback_days": 14,
+      "top_k": 3,
+      "rebalance_days": 3,
+      "role": "VALIDATION_SELECTED_CONTROL",
+      "selection_note": "ranked first using the preregistered 2025 validation partition before OOS assessment"
+    },
+    {
+      "name": "FCR_28D_TOP3_WEEKLY",
+      "lookback_days": 28,
+      "top_k": 3,
+      "rebalance_days": 7,
+      "role": "POST_OOS_STABILITY_HYPOTHESIS",
+      "selection_note": "chosen only as a new prospective hypothesis after observing cross-era stress positivity; historical OOS cannot be reused as promotion evidence"
+    }
+  ],
+  "excluded_from_forward_freeze": [
+    "FCR_3D_TOP3_DAILY",
+    "FCR_7D_TOP3_DAILY",
+    "FCR_7D_TOP5_DAILY"
+  ],
+  "forward_reporting": [
+    "completed_days",
+    "total_return",
+    "annualized_sharpe",
+    "max_drawdown",
+    "bootstrap_positive_fraction",
+    "avg_turnover",
+    "avg_gross_exposure",
+    "avg_funding_return",
+    "avg_price_return",
+    "quarterly_or_monthly_return",
+    "long_short_symbol_concentration"
+  ],
+  "promotion_from_this_manifest": "PROHIBITED_WITHOUT_A_SEPARATELY_PREREGISTERED_FORWARD_GATE_AND_NEW_PROSPECTIVE_EVIDENCE"
+}
