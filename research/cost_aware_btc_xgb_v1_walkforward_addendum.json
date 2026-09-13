@@ -1,0 +1,10 @@
+{
+  "schema_version": "CRYPTO_COST_AWARE_BTC_XGB_V1_WALKFORWARD_ADDENDUM",
+  "frozen_before_simulation": true,
+  "validation_retraining": "at the start of each 2025 calendar month, refit the same frozen model using only samples whose target exit is strictly before month start",
+  "oos_retraining": "at the start of each 2026 calendar month, refit the same frozen model using only samples whose target exit is strictly before month start; prior OOS months may enter later model fits as realized history",
+  "untouched_definition": "OOS is untouched for model/feature/hyperparameter/candidate selection; sequential past outcomes may update model coefficients exactly as preregistered monthly walk-forward",
+  "no_oos_tuning": true,
+  "minimum_training_samples": 10000,
+  "candidate_selection": "rank the two frozen thresholds on 2025 validation only; 2026 metrics are report-only"
+}
