@@ -1,0 +1,20 @@
+{
+  "schema_version":"CRYPTO_REGIME_PULLBACK_ROTATION_V1_FREEZE",
+  "frozen_at_utc":"2026-09-13T17:02:00Z",
+  "research_only":true,
+  "execution_influence":false,
+  "live_execution_enabled":false,
+  "regime":"same frozen BTC D1 EMA200 plus 60D momentum contract",
+  "rebalance":"completed Monday D1 signal; next Tuesday 00:00 UTC entry; hold exactly 7 days",
+  "ranking":"7D completed-close return ending Monday",
+  "bull":"LONG bottom 3 weakest 7D returns, equal weights",
+  "bear":"SHORT top 3 strongest 7D returns, equal weights",
+  "flat":"cash / NO_TRADE",
+  "interpretation":"buy dips in bull regimes; short rallies in bear regimes",
+  "costs_bps_round_trip":{"base":8.0,"stress":14.0,"severe":25.0},
+  "funding":"actual funding strictly inside holding interval; stress benefit x0.8 and adverse x1.2",
+  "periods":{"warmup":"2023","train":"2024","validation":"2025","oos":"2026-01-01..2026-08-31"},
+  "selection_partition":"validation only",
+  "oos_used_for_selection":false,
+  "gate":{"validation_active_weeks_min":30,"oos_active_weeks_min":20,"validation_stress_return_min":0.0,"validation_sharpe_min":0.75,"validation_max_dd":0.30,"oos_stress_return_min":0.0,"oos_sharpe_min":0.50,"oos_max_dd":0.30,"oos_bootstrap_positive_min":0.70,"validation_distinct_symbols_min":12,"oos_distinct_symbols_min":8,"severe_oos_return_min":0.0}
+}
