@@ -1,0 +1,17 @@
+{
+  "schema_version": "CRYPTO_COST_AWARE_BTC_XGB_V1_FEATURE_ADDENDUM",
+  "frozen_before_simulation": true,
+  "returns": "close_t/close_{t-n}-1 for n in 1,3,6,12,24,72 hours",
+  "realized_vol": "population standard deviation of hourly close-to-close returns over the last 24 or 72 returns ending at signal close",
+  "atr24_over_close": "arithmetic mean of true range over last 24 completed hourly bars divided by signal close",
+  "ema_ratio": "causal recursive EMA12/EMA48-1 through signal close using alpha=2/(span+1), initialized from first available close",
+  "rsi14_scaled": "simple 14-hour RSI from gains/losses ending at signal close, transformed as (RSI-50)/50",
+  "volume_z24_168": "signal-bar quote volume minus mean of previous N completed bars, divided by population std of those previous N bars; current bar excluded from baseline",
+  "taker_imbalance_1h": "(2*taker_buy_quote_volume-quote_volume)/quote_volume on signal hour",
+  "taker_imbalance_6h": "arithmetic mean of the last six completed hourly taker imbalances including signal hour",
+  "funding_last": "most recent funding rate with timestamp strictly before entry timestamp; zero only if no prior observation exists",
+  "funding_mean_24h": "mean of funding observations in [entry-24h, entry); zero if none",
+  "target": "open_{t+1+4h}/open_{t+1}-1, where signal bar t is completed and t+1 is the exact next hourly open",
+  "continuity": "require exact 1h continuity across the previous 168 bars and through target exit; otherwise sample is skipped",
+  "missing_feature_policy": "skip sample; no imputation other than explicitly defined zero for absent prior funding"
+}
