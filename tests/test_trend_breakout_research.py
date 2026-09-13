@@ -3,8 +3,8 @@ from decimal import Decimal
 from crypto_scanner.binance.models import Candle
 from crypto_scanner.trend_breakout_research import (
     FROZEN_CANDIDATES,
-    reprice_cost,
     replay_candidate,
+    reprice_cost,
     summarize,
 )
 
