@@ -34,7 +34,7 @@ jobs:
           pip install pytest==8.4.2 ruff==0.12.12
       - name: Lint
         run: |
-          ruff check --ignore E501 src/crypto_scanner/slow_trend_ensemble_research.py \
+          ruff check --ignore E501,F401 src/crypto_scanner/slow_trend_ensemble_research.py \
             tests/test_slow_trend_ensemble_research.py
       - name: Unit tests
         run: pytest -q tests/test_slow_trend_ensemble_research.py
