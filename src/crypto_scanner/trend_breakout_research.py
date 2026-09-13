@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Iterable, Literal
+from typing import Literal
 
 from crypto_scanner.binance.models import Candle
 
@@ -300,4 +301,7 @@ def split_calendar(
 
 def summary_payload(trades: Iterable[TrendBreakoutTrade]) -> dict[str, object]:
     raw = asdict(summarize(trades))
-    return {key: (str(value) if isinstance(value, Decimal) else value) for key, value in raw.items()}
+    return {
+        key: str(value) if isinstance(value, Decimal) else value
+        for key, value in raw.items()
+    }
