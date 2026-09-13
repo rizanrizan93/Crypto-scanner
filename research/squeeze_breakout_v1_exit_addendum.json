@@ -1,0 +1,11 @@
+{
+  "schema_version": "CRYPTO_SQUEEZE_BREAKOUT_V1_EXIT_ADDENDUM",
+  "frozen_before_simulation": true,
+  "max_hold_exit": "if neither stop nor target is hit, exit at close of the 18th 4h bar after entry",
+  "intrabar_collision": "if both stop and target are touched in one candle, book stop first",
+  "gap_policy": "entry is exact next 4h open; if that open is already beyond the frozen stop level, reject the setup as invalid geometry; if entry is beyond target level, reject as invalid geometry",
+  "r_accounting": "1R equals absolute entry-to-stop price distance; trading costs and funding are converted to R using entry notional return divided by stop-distance return",
+  "funding_exit_timestamp": "for stop/target event, use end timestamp of triggering 4h candle; for max-hold exit use end timestamp of 18th held candle",
+  "bootstrap": "200 trials, 14-trade circular blocks, positive total net R fraction",
+  "drawdown": "peak-to-trough cumulative net R across closed trades ordered by exit time"
+}
