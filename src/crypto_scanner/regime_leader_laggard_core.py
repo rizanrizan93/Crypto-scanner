@@ -74,7 +74,7 @@ def build_weekly_trades(
             continue
         regime = regimes[pos].state
         ranked: list[tuple[float, str]] = []
-        for symbol, rows in daily.items():
+        for symbol, _rows in daily.items():
             by_time = maps[symbol]
             current = by_time.get(signal.start_ms)
             prior = by_time.get(signal.start_ms - 28 * DAY_MS)
