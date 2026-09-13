@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Iterable
 
 from crypto_scanner.binance.models import Candle
 from crypto_scanner.binance_public_archive import BinancePublicArchiveClient, make_monthly_package
@@ -229,11 +229,7 @@ def _candidate_trades(
 def _breadth(
     by_symbol: dict[str, tuple[HistoricalResearchTrade, ...]],
 ) -> dict[str, object]:
-    eligible = {
-        symbol: rows
-        for symbol, rows in by_symbol.items()
-        if rows
-    }
+    eligible = {symbol: rows for symbol, rows in by_symbol.items() if rows}
     positive = [
         symbol
         for symbol, rows in eligible.items()
@@ -266,7 +262,9 @@ def build_candidate_report(
         "partitions": {},
     }
     for cost_label, cost in (("base", base_cost_bps), ("stress", stress_cost_bps)):
-        cost_symbol_partitions: dict[str, dict[str, tuple[HistoricalResearchTrade, ...]]] = {}
+        cost_symbol_partitions: dict[
+            str, dict[str, tuple[HistoricalResearchTrade, ...]]
+        ] = {}
         for symbol, gross_rows in gross_by_symbol.items():
             priced = apply_cost(gross_rows, round_trip_cost_bps=cost)
             cost_symbol_partitions[symbol] = split_trades_by_calendar(
@@ -443,11 +441,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    symbols = tuple(
-        item.strip().upper()
-        for item in args.symbols.split(",")
-        if item.strip()
-    )
+    symbols = tuple(item.strip().upper() for item in args.symbols.split(",") if item.strip())
     if not symbols or any(symbol not in DEFAULT_UNIVERSE for symbol in symbols):
         raise SystemExit("symbols must be a non-empty subset of the fixed 20-pair universe")
     validate_split(
