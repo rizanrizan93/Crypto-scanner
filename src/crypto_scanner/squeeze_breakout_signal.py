@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from crypto_scanner.binance.models import Candle
-from crypto_scanner.funding_carry_research import FIXED_UNIVERSE
 
-UNIVERSE = FIXED_UNIVERSE
+UNIVERSE = (
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "LTCUSDT", "BCHUSDT",
+    "TRXUSDT", "SUIUSDT", "AAVEUSDT", "UNIUSDT", "ETCUSDT", "NEARUSDT",
+    "ATOMUSDT", "XLMUSDT",
+)
 ATR_PERIOD = 14
 PERCENTILE_WINDOW = 90
 BREAKOUT_WINDOW = 20
