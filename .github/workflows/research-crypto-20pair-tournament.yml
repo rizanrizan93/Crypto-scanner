@@ -6,6 +6,7 @@ on:
       - research/crypto-20pair-walkforward-tournament
     paths:
       - "src/crypto_scanner/research_tournament.py"
+      - "src/crypto_scanner/research_tournament_validation.py"
       - "src/crypto_scanner/historical_research.py"
       - "src/crypto_scanner/binance_public_archive.py"
       - "tests/test_research_tournament.py"
@@ -35,7 +36,7 @@ jobs:
           pip install -e .
       - name: Run full 20-pair official-archive tournament
         run: |
-          python -m crypto_scanner.research_tournament \
+          python -m crypto_scanner.research_tournament_validation \
             --interval 15m \
             --start 2024-01 \
             --train-through 2024-12 \
@@ -49,14 +50,19 @@ jobs:
           from pathlib import Path
           p = Path("crypto_20pair_tournament_15m.json")
           data = json.loads(p.read_text())
-          print("CRYPTO_TOURNAMENT_RANKING", data["ranking"])
+          assert data["schema_version"] == "crypto-research-tournament-v2"
+          assert data["selection_partition"] == "validation"
+          assert data["oos_used_for_selection"] is False
+          print("CRYPTO_TOURNAMENT_VALIDATION_RANKING", data["ranking"])
           for row in data["candidates"]:
               name = row["candidate"]["name"]
+              validation = row["partitions"]["base"]["periods"]["validation"]
               base = row["partitions"]["base"]["periods"]["oos"]
               stress = row["partitions"]["stress"]["periods"]["oos"]
               print(
                   "CRYPTO_TOURNAMENT_OOS",
                   name,
+                  "validation_avg_net_r=", validation["summary"]["average_net_r"],
                   "trades=", base["summary"]["sample_size"],
                   "avg_net_r=", base["summary"]["average_net_r"],
                   "stress_avg_net_r=", stress["summary"]["average_net_r"],
