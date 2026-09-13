@@ -1,0 +1,42 @@
+{
+  "schema_version": "CRYPTO_PREMIUM_DISLOCATION_REVERSAL_V1_FREEZE",
+  "frozen_at_utc": "2026-09-13T16:12:00Z",
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "universe": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"],
+  "sources": ["BINANCE_VISION_USDM_MONTHLY_PREMIUM_INDEX_KLINES_5M", "BINANCE_VISION_USDM_MONTHLY_KLINES_5M", "BINANCE_VISION_USDM_MONTHLY_FUNDING_RATE"],
+  "signal_clock": "hourly UTC; use completed 5m premium candle ending at HH:00, then enter at exact HH:00 regular futures open",
+  "premium_signal": "causal 28-day rolling z-score of hourly premium-index close; current observation excluded; minimum 90% coverage",
+  "funding_confirmation": "trailing 3-calendar-day average funding must have same crowding sign as premium dislocation",
+  "directions": "LONG when premium_z<=-1.5 and trailing funding<0; SHORT when premium_z>=1.5 and trailing funding>0; otherwise NO_TRADE",
+  "one_position_per_symbol": true,
+  "overlap_policy": "skip new signal while symbol position remains open",
+  "candidates": [
+    {"name": "PDR_Z1P5_F3D_H8", "hold_hours": 8},
+    {"name": "PDR_Z1P5_F3D_H24", "hold_hours": 24}
+  ],
+  "costs_bps_round_trip": {"base": 8.0, "stress": 14.0, "severe": 25.0},
+  "funding_pnl": "realized funding strictly between entry and exit; positive benefit haircut 20% under stress/severe and negative cost magnified 20%",
+  "period": {"warmup_start": "2023-12-01", "train": "2024", "validation": "2025", "oos": "2026-01-01..2026-08-31"},
+  "selection_partition": "validation only",
+  "oos_used_for_selection": false,
+  "portfolio_accounting": "six equal symbol sleeves, at most one open trade per symbol",
+  "historical_gate": {
+    "validation_closed_trades_min": 100,
+    "oos_closed_trades_min": 60,
+    "validation_long_min": 20,
+    "validation_short_min": 20,
+    "oos_long_min": 12,
+    "oos_short_min": 12,
+    "validation_stress_total_return_min": 0.0,
+    "validation_stress_sharpe_min": 0.75,
+    "validation_stress_max_dd": 0.30,
+    "oos_stress_total_return_min": 0.0,
+    "oos_stress_sharpe_min": 0.50,
+    "oos_stress_max_dd": 0.30,
+    "oos_bootstrap_positive_min": 0.70,
+    "severe_25bps_oos_total_return_min": 0.0
+  },
+  "promotion_note": "historical pass grants research/shadow eligibility only; never order authority"
+}
