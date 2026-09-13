@@ -1,0 +1,8 @@
+{
+  "schema_version": "CRYPTO_SQUEEZE_BREAKOUT_V1_GEOMETRY_CLARIFICATION",
+  "frozen_before_simulation": true,
+  "entry_anchor": "actual next 4h open",
+  "long_levels": "stop=entry-1.5*signal_ATR14; target=entry+3.0*signal_ATR14",
+  "short_levels": "stop=entry+1.5*signal_ATR14; target=entry-3.0*signal_ATR14",
+  "gap_clarification": "because levels are anchored to actual entry, the prior gap-invalid clause only rejects non-positive or malformed entry/ATR geometry; no signal-close level is silently substituted"
+}
