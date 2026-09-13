@@ -28,7 +28,7 @@ def main() -> int:
     daily = {}
     funding = {}
     coverage = {}
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(load_symbol, symbol): symbol for symbol in UNIVERSE}
         for future in as_completed(futures):
             symbol, h4, points, missing_price, missing_funding = future.result()
