@@ -17,7 +17,7 @@ from crypto_scanner.quarter_hour_ofi_core import (
 from crypto_scanner.quarter_hour_ofi_data import load_symbol
 
 SEED = 20260913
-WORKERS = 3
+WORKERS = 6
 
 
 def _bounds(label: str) -> tuple[date, date]:
