@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from crypto_scanner.binance.models import Candle
-from crypto_scanner.funding_carry_research import FundingPoint
+from crypto_scanner.squeeze_archive_data import FundingPoint
 from crypto_scanner.squeeze_breakout_signal import BAR_MS, Setup
 
 STOP_ATR = 1.5
