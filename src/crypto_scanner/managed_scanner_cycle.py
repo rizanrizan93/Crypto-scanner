@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from crypto_scanner import scanner_cycle
+from crypto_scanner.fast_lane import ReadinessDecision, ReadinessStatus
 from crypto_scanner.hot_watch import FAST_WATCH_INTERVAL_SECONDS
 from crypto_scanner.management_health import record_tick
 from crypto_scanner.persistence import TransientPersistenceError
@@ -15,11 +16,13 @@ from crypto_scanner.profit_lock_watch import (
     emit_profit_lock_tick,
     run_profit_lock_tick,
 )
+from crypto_scanner.strategy_params import DEFAULT_STRATEGY_PARAMETERS, StrategyParameters
 from crypto_scanner.strategy_promotion import (
     PromotionStage,
     StrategyRuntimeSelection,
     load_strategy_runtime,
 )
+from crypto_scanner.transaction_costs import cost_adjusted_reward_r
 
 _DEMO_COLLECTION_ENV = "CRYPTO_SCANNER_DEMO_DATA_COLLECTION"
 _DEMO_COLLECTION_STAGES = frozenset(
@@ -80,6 +83,31 @@ def authorize_demo_data_collection(
     return replace(runtime, execution_authorized=True)
 
 
+def apply_round_trip_cost_gate(
+    decision: ReadinessDecision,
+    strategy: StrategyParameters,
+) -> ReadinessDecision:
+    """Require the existing TP2 quality floor to remain true after baseline friction."""
+
+    strategy.validate()
+    geometry = decision.geometry
+    if not decision.execution_ready or geometry is None:
+        return decision
+    reward = cost_adjusted_reward_r(
+        entry_price=geometry.entry_price,
+        initial_risk=geometry.initial_risk,
+        gross_rr=geometry.rr_tp2,
+    )
+    if reward.net_rr >= strategy.min_rr_tp2:
+        return decision
+    return replace(
+        decision,
+        status=ReadinessStatus.REJECTED,
+        geometry=None,
+        reasons=decision.reasons + ("NET_RR_AFTER_COST_TOO_LOW",),
+    )
+
+
 def _load_managed_strategy_runtime(config: object) -> StrategyRuntimeSelection:
     runtime = load_strategy_runtime(config)  # type: ignore[arg-type]
     return authorize_demo_data_collection(
@@ -92,9 +120,19 @@ def main() -> None:
     """Run the scanner with serialized management and optional Demo data collection."""
     original_time = scanner_cycle.time
     original_loader = scanner_cycle.load_strategy_runtime
+    original_readiness = scanner_cycle.evaluate_execution_readiness
     collection_enabled = demo_data_collection_enabled()
+
+    def cost_aware_readiness(*args, **kwargs):
+        decision = original_readiness(*args, **kwargs)
+        strategy = kwargs.get("strategy")
+        if not isinstance(strategy, StrategyParameters):
+            strategy = DEFAULT_STRATEGY_PARAMETERS
+        return apply_round_trip_cost_gate(decision, strategy)
+
     scanner_cycle.time = ProfitLockManagedClock()
     scanner_cycle.load_strategy_runtime = _load_managed_strategy_runtime
+    scanner_cycle.evaluate_execution_readiness = cost_aware_readiness
     if collection_enabled:
         print(
             json.dumps(
@@ -102,6 +140,7 @@ def main() -> None:
                     "status": "DEMO_DATA_COLLECTION_MODE_ENABLED",
                     "promotion_bypass": False,
                     "forward_demo_credit": False,
+                    "cost_adjusted_rr_gate": True,
                     "live_trading_locked": True,
                 },
                 sort_keys=True,
@@ -126,6 +165,7 @@ def main() -> None:
     finally:
         scanner_cycle.time = original_time
         scanner_cycle.load_strategy_runtime = original_loader
+        scanner_cycle.evaluate_execution_readiness = original_readiness
 
 
 if __name__ == "__main__":
