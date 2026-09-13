@@ -1,0 +1,35 @@
+name: Research Crypto Bull Long Bear Short V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-bull-long-bear-short-v1
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -e .
+          pip install pytest ruff==0.12.12
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/bull_bear_regime_data.py src/crypto_scanner/run_bull_bear_regime_research.py tests/test_bull_bear_regime_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_bull_bear_regime_research.py
+      - name: Frozen historical screen
+        run: python -m crypto_scanner.run_bull_bear_regime_research | tee bull_bear_regime_v1.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-bull-long-bear-short-v1
+          path: bull_bear_regime_v1.log
+          retention-days: 30
