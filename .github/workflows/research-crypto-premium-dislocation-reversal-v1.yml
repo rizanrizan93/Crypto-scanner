@@ -1,0 +1,64 @@
+name: Research Crypto Premium Dislocation Reversal V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/crypto-premium-dislocation-reversal-v1
+    paths:
+      - "src/crypto_scanner/premium_dislocation_signal.py"
+      - "src/crypto_scanner/premium_dislocation_data.py"
+      - "src/crypto_scanner/premium_dislocation_engine.py"
+      - "src/crypto_scanner/run_premium_dislocation_research.py"
+      - "tests/test_premium_dislocation_research.py"
+      - "research/premium_dislocation_reversal_v1_contract.json"
+      - ".github/workflows/research-crypto-premium-dislocation-reversal-v1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff==0.12.12
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/premium_dislocation_signal.py src/crypto_scanner/premium_dislocation_data.py src/crypto_scanner/premium_dislocation_engine.py src/crypto_scanner/run_premium_dislocation_research.py tests/test_premium_dislocation_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_premium_dislocation_research.py
+      - name: Frozen historical screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.run_premium_dislocation_research | tee premium_dislocation_v1.log
+          tail -n 1 premium_dislocation_v1.log > premium_dislocation_v1.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('premium_dislocation_v1.json').read_text())
+          assert d['schema_version']=='CRYPTO_PREMIUM_DISLOCATION_REVERSAL_V1'
+          assert d['research_only'] is True
+          assert d['execution_influence'] is False
+          assert d['live_execution_enabled'] is False
+          assert d['oos_used_for_selection'] is False
+          print('PDR_HISTORICAL_PASS', d['historical_pass'])
+          for r in d['rows']:
+              v=r['stress']['validation']; o=r['stress']['oos']; s=r['severe_25bps']['oos']
+              print('PDR_ROW',r['candidate'],'val_ret=',v['total_return'],'val_sh=',v['annualized_sharpe'],'val_n=',v['closed_trades'],'oos_ret=',o['total_return'],'oos_sh=',o['annualized_sharpe'],'oos_dd=',o['max_drawdown'],'oos_boot=',o['bootstrap_positive_fraction_200'],'severe25=',s['total_return'],'pass=',r['historical_pass'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-premium-dislocation-reversal-v1
+          path: premium_dislocation_v1.json
+          if-no-files-found: error
+          retention-days: 30
