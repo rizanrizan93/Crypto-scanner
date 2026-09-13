@@ -1,0 +1,9 @@
+{
+  "schema_version": "CRYPTO_QUARTER_HOUR_OFI_V1_DIRECTION_GATE_ADDENDUM",
+  "frozen_before_simulation": true,
+  "validation_min_long_trades": 30,
+  "validation_min_short_trades": 30,
+  "oos_min_long_trades": 20,
+  "oos_min_short_trades": 20,
+  "purpose": "prevent a nominally dual-sided strategy from passing on effectively one-sided evidence"
+}
