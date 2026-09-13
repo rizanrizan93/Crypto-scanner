@@ -40,7 +40,7 @@ jobs:
             tests/test_funding_carry_research.py
       - name: Unit tests
         run: pytest -q tests/test_funding_carry_research.py
-      - name: Run official Binance price plus funding historical screen
+      - name: Run official Binance Vision price plus funding historical screen
         shell: bash
         run: |
           set -euo pipefail
@@ -56,7 +56,8 @@ jobs:
           assert data["research_only"] is True
           assert data["execution_influence"] is False
           assert data["live_execution_enabled"] is False
-          assert data["funding_endpoint"] == "/fapi/v1/fundingRate"
+          assert data["funding_source"] == "BINANCE_VISION_USDM_MONTHLY_FUNDING_RATE"
+          assert data["funding_integrity"] == "sibling .CHECKSUM SHA-256 required; fail closed"
           assert data["universe_contract"] == "FIXED_20_PAIR_WITH_XLM_NO_FIL"
           assert len(data["universe"]) == 20
           assert "XLMUSDT" in data["universe"]
