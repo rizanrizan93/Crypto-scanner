@@ -1,0 +1,47 @@
+{
+  "schema_version": "CRYPTO_FUNDING_CARRY_BETA_HEDGE_FORWARD_GATE_V1",
+  "registered_at_utc": "2026-09-13T13:52:00Z",
+  "forward_start_utc": "2026-09-14T00:00:00Z",
+  "candidate_scope": ["FCR_BH_28D_TOP3_WEEKLY_BETA60"],
+  "research_only": true,
+  "execution_influence": false,
+  "live_execution_enabled": false,
+  "automatic_order_authority": false,
+  "eligibility_target": "LIMITED_SHADOW_OR_TESTNET_INTEGRATION_EXPERIMENT_ONLY",
+  "minimum_forward_evidence": {
+    "calendar_days": 120,
+    "completed_evaluation_days": 90,
+    "distinct_months": 4
+  },
+  "stress_gate": {
+    "round_trip_bps": 14.0,
+    "positive_funding_haircut": 0.20,
+    "negative_funding_cost_multiplier": 1.20,
+    "total_return": ">0",
+    "annualized_sharpe_min": 0.75,
+    "max_drawdown_max": 0.20,
+    "block_bootstrap_positive_fraction_min": 0.70,
+    "positive_month_fraction_min": 0.75,
+    "worst_month_return_min": -0.075,
+    "avg_gross_exposure_min": 0.75,
+    "avg_funding_return": ">0"
+  },
+  "severe_cost_gate": {
+    "round_trip_bps": 25.0,
+    "total_return": ">0",
+    "max_drawdown_max": 0.25
+  },
+  "immutability": {
+    "lookback_days": 28,
+    "top_k": 3,
+    "rebalance_days": 7,
+    "beta_window_days": 60,
+    "max_abs_raw_btc_hedge": 0.50,
+    "parameter_changes_after_forward_start_allowed": 0
+  },
+  "decision_policy": {
+    "if_pass": "eligible only for separately reviewed limited shadow/testnet integration experiment",
+    "if_fail": "remain research-only; no threshold relaxation and no automatic retuning",
+    "production_or_live_promotion": "PROHIBITED"
+  }
+}
