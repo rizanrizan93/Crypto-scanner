@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from math import sqrt
 from random import Random
 from statistics import mean, pstdev
 
 from crypto_scanner.binance.models import Candle
 
-UTC = timezone.utc
 SEED = 20260913
 
 
@@ -58,10 +57,19 @@ def candles_to_complete_utc_days(candles: tuple[Candle, ...]) -> tuple[DailyBar,
     expected_hours = (0, 4, 8, 12, 16, 20)
     for day, items in sorted(by_day.items()):
         items = sorted(items, key=lambda row: row.start_time_ms)
-        hours = tuple(datetime.fromtimestamp(row.start_time_ms / 1000, tz=UTC).hour for row in items)
+        hours = tuple(
+            datetime.fromtimestamp(row.start_time_ms / 1000, tz=UTC).hour
+            for row in items
+        )
         if len(items) != 6 or hours != expected_hours:
             continue
-        rows.append(DailyBar(day=day, open=float(items[0].open), close=float(items[-1].close)))
+        rows.append(
+            DailyBar(
+                day=day,
+                open=float(items[0].open),
+                close=float(items[-1].close),
+            )
+        )
     return tuple(rows)
 
 
@@ -122,7 +130,10 @@ def _weights(holdings: tuple[str, ...]) -> dict[str, float]:
 
 
 def _turnover(old: dict[str, float], new: dict[str, float]) -> float:
-    return sum(abs(new.get(symbol, 0.0) - old.get(symbol, 0.0)) for symbol in set(old) | set(new))
+    return sum(
+        abs(new.get(symbol, 0.0) - old.get(symbol, 0.0))
+        for symbol in set(old) | set(new)
+    )
 
 
 def simulate_portfolio(
@@ -134,9 +145,17 @@ def simulate_portfolio(
     base_carry_bps_per_day: float = 1.0,
     stress_carry_bps_per_day: float = 3.0,
 ) -> tuple[DailyPortfolioReturn, ...]:
-    opens = {symbol: {row.day: row.open for row in rows} for symbol, rows in daily_by_symbol.items()}
-    closes = {symbol: {row.day: row.close for row in rows} for symbol, rows in daily_by_symbol.items()}
-    calendar = sorted({day for rows in daily_by_symbol.values() for row in rows for day in (row.day,)})
+    opens = {
+        symbol: {row.day: row.open for row in rows}
+        for symbol, rows in daily_by_symbol.items()
+    }
+    closes = {
+        symbol: {row.day: row.close for row in rows}
+        for symbol, rows in daily_by_symbol.items()
+    }
+    calendar = sorted(
+        {row.day for rows in daily_by_symbol.values() for row in rows}
+    )
     previous_weights: dict[str, float] = {}
     rows: list[DailyPortfolioReturn] = []
     last_rebalance_index: int | None = None
@@ -146,7 +165,10 @@ def simulate_portfolio(
         entry_day = calendar[idx]
         exit_day = calendar[idx + 1]
 
-        rebalance = last_rebalance_index is None or idx - last_rebalance_index >= candidate.rebalance_days
+        rebalance = (
+            last_rebalance_index is None
+            or idx - last_rebalance_index >= candidate.rebalance_days
+        )
         if rebalance:
             holdings = select_holdings(closes, signal_day, candidate)
             new_weights = _weights(holdings)
@@ -158,11 +180,15 @@ def simulate_portfolio(
         tradable_weights = {
             symbol: weight
             for symbol, weight in new_weights.items()
-            if entry_day in opens.get(symbol, {}) and exit_day in opens.get(symbol, {})
+            if entry_day in opens.get(symbol, {})
+            and exit_day in opens.get(symbol, {})
         }
         total_weight = sum(tradable_weights.values())
         if total_weight > 0:
-            tradable_weights = {symbol: weight / total_weight for symbol, weight in tradable_weights.items()}
+            tradable_weights = {
+                symbol: weight / total_weight
+                for symbol, weight in tradable_weights.items()
+            }
         else:
             tradable_weights = {}
 
@@ -212,7 +238,12 @@ def _total_return(returns: list[float]) -> float:
     return equity - 1.0
 
 
-def _block_bootstrap_positive_fraction(returns: list[float], *, trials: int = 100, block: int = 14) -> float:
+def _block_bootstrap_positive_fraction(
+    returns: list[float],
+    *,
+    trials: int = 100,
+    block: int = 14,
+) -> float:
     if not returns:
         return 0.0
     rng = Random(SEED)
@@ -228,7 +259,11 @@ def _block_bootstrap_positive_fraction(returns: list[float], *, trials: int = 10
     return positive / trials
 
 
-def summarize(rows: tuple[DailyPortfolioReturn, ...], *, field: str) -> dict[str, float | int]:
+def summarize(
+    rows: tuple[DailyPortfolioReturn, ...],
+    *,
+    field: str,
+) -> dict[str, float | int]:
     returns = [float(getattr(row, field)) for row in rows]
     if not returns:
         return {
@@ -253,11 +288,25 @@ def summarize(rows: tuple[DailyPortfolioReturn, ...], *, field: str) -> dict[str
     }
 
 
-def split_calendar(rows: tuple[DailyPortfolioReturn, ...]) -> dict[str, tuple[DailyPortfolioReturn, ...]]:
+def split_calendar(
+    rows: tuple[DailyPortfolioReturn, ...],
+) -> dict[str, tuple[DailyPortfolioReturn, ...]]:
     return {
-        "train": tuple(row for row in rows if date(2024, 1, 1) <= row.entry_day <= date(2024, 12, 31)),
-        "validation": tuple(row for row in rows if date(2025, 1, 1) <= row.entry_day <= date(2025, 12, 31)),
-        "oos": tuple(row for row in rows if date(2026, 1, 1) <= row.entry_day <= date(2026, 8, 31)),
+        "train": tuple(
+            row
+            for row in rows
+            if date(2024, 1, 1) <= row.entry_day <= date(2024, 12, 31)
+        ),
+        "validation": tuple(
+            row
+            for row in rows
+            if date(2025, 1, 1) <= row.entry_day <= date(2025, 12, 31)
+        ),
+        "oos": tuple(
+            row
+            for row in rows
+            if date(2026, 1, 1) <= row.entry_day <= date(2026, 8, 31)
+        ),
     }
 
 
