@@ -1,0 +1,52 @@
+name: Research Crypto Adaptive Regime Router V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [research/crypto-adaptive-regime-router-v1]
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -e .
+          pip install pytest ruff==0.12.12
+      - name: Lint
+        run: ruff check --ignore E501,I001 src/crypto_scanner/adaptive_*.py src/crypto_scanner/run_adaptive_regime_router_research.py tests/test_adaptive_regime_router_research.py
+      - name: Unit tests
+        run: pytest -q tests/test_adaptive_regime_router_research.py
+      - name: Frozen historical screen
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m crypto_scanner.run_adaptive_regime_router_research | tee adaptive_regime_router_v1.log
+          tail -n 1 adaptive_regime_router_v1.log > adaptive_regime_router_v1.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('adaptive_regime_router_v1.json').read_text())
+          assert d['schema_version']=='CRYPTO_ADAPTIVE_REGIME_ROUTER_V1'
+          assert d['research_only'] is True
+          assert d['execution_influence'] is False
+          assert d['live_execution_enabled'] is False
+          assert d['oos_used_for_selection'] is False
+          r=d['rows'][0]; v=r['stress']['validation']; o=r['stress']['oos']; s=r['severe_25bps']['oos']
+          print('ARR_HISTORICAL_PASS',d['historical_pass'])
+          print('ARR_ROW','val_n=',v['closed_trades'],'val_exp=',v['expectancy_r'],'val_pf=',v['profit_factor'],'val_dd=',v['max_drawdown_r'],'oos_n=',o['closed_trades'],'oos_exp=',o['expectancy_r'],'oos_pf=',o['profit_factor'],'oos_dd=',o['max_drawdown_r'],'oos_boot=',o['bootstrap_positive_fraction_200'],'severe25_exp=',s['expectancy_r'],'pass=',r['historical_pass'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-adaptive-regime-router-v1
+          path: adaptive_regime_router_v1.json
+          if-no-files-found: error
+          retention-days: 30
