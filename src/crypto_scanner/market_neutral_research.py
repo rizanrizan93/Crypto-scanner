@@ -246,8 +246,12 @@ def simulate(
         stress_cost = turnover * (stress_round_trip_bps / 2.0) / 10_000.0
         base_carry = gross_exposure * base_carry_bps_per_day / 10_000.0
         stress_carry = gross_exposure * stress_carry_bps_per_day / 10_000.0
-        long_symbols = tuple(sorted(symbol for symbol, value in weights.items() if value > 0))
-        short_symbols = tuple(sorted(symbol for symbol, value in weights.items() if value < 0))
+        long_symbols = tuple(
+            sorted(symbol for symbol, value in weights.items() if value > 0)
+        )
+        short_symbols = tuple(
+            sorted(symbol for symbol, value in weights.items() if value < 0)
+        )
         output.append(
             PortfolioDay(
                 day=entry_day,
@@ -323,7 +327,11 @@ def summarize(
         }
     sigma = pstdev(values)
     sharpe = 0.0 if sigma == 0 else sqrt(365.0) * mean(values) / sigma
-    active_values = [value for value, row in zip(values, rows) if row.gross_exposure > 0]
+    active_values = [
+        value
+        for value, row in zip(values, rows, strict=False)
+        if row.gross_exposure > 0
+    ]
     win_rate = (
         sum(value > 0 for value in active_values) / len(active_values)
         if active_values
