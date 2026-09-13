@@ -1,0 +1,5 @@
+Frozen before simulation.
+Report train 2024, validation 2025, and untouched OOS Jan-Aug 2026 separately.
+For each partition report active weeks, bull weeks, bear weeks, compounded net return, annualized weekly Sharpe, max drawdown, 200-trial 4-week circular-block bootstrap positive fraction, distinct selected symbols, and separate compounded return for bull and bear weeks.
+Portfolio has gross exposure 1.0 only during active weeks; each of 3 selected symbols has weight 1/3. Flat regime stays in cash.
+No parameter or gate may be changed after reading validation/OOS results.
