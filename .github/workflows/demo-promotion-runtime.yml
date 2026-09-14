@@ -51,6 +51,8 @@ jobs:
         continue-on-error: true
         run: crypto-scanner-heartbeat PROMOTION_CYCLE RUNNING
       - name: Evaluate historical promotion gate only for legacy slot
+        # Compatibility marker: crypto-scanner-strategy-promote historically owned
+        # both gates; forward-Demo evaluation is now delegated to the strategy pool.
         run: python -m crypto_scanner.strategy_promotion_historical_only
       - name: Evaluate independent forward-Demo gates for strategy pool
         run: python -m crypto_scanner.strategy_pool_runtime
