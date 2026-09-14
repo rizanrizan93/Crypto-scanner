@@ -7,10 +7,8 @@ from enum import StrEnum
 
 import httpx
 
-from crypto_scanner.funding_oi_demo import (
-    FUNDING_OI_STRATEGY_ID,
-    SLEEVE_STOP_RISK_BUDGET as FUNDING_OI_RISK,
-)
+from crypto_scanner.funding_oi_demo import FUNDING_OI_STRATEGY_ID
+from crypto_scanner.funding_oi_demo import SLEEVE_STOP_RISK_BUDGET as FUNDING_OI_RISK
 from crypto_scanner.persistence import (
     PersistenceError,
     SupabasePersistenceConfig,
@@ -23,8 +21,8 @@ from crypto_scanner.regime_specialist_demo import (
 )
 from crypto_scanner.volatility_breakout_demo import (
     SLEEVE_STOP_RISK_BUDGET as VOL_BREAKOUT_RISK,
-    VOLATILITY_BREAKOUT_STRATEGY_ID,
 )
+from crypto_scanner.volatility_breakout_demo import VOLATILITY_BREAKOUT_STRATEGY_ID
 
 POOL_STATE_KEY = "multi_strategy_demo_pool_v1"
 POOL_SCHEMA_VERSION = "multi-strategy-demo-pool-v1"
