@@ -103,6 +103,24 @@ def test_terminal_demo_status_cannot_silently_rearm() -> None:
     )
 
 
+def test_pool_does_not_rank_before_minimum_forward_sample() -> None:
+    state = seed_strategy_pool(now_ms=123)
+    sparse = tuple(
+        replace(
+            entry,
+            metrics={
+                "sample_size": pool_runtime.MIN_RANKING_SAMPLE - 1,
+                "expectancy_r": "10",
+                "profit_factor": "99",
+                "max_drawdown_r": "0",
+            },
+        )
+        for entry in state.entries
+    )
+    ranked = pool_runtime.rank_pool_entries(sparse)
+    assert all(entry.rank is None for entry in ranked)
+
+
 def test_pool_ranking_prefers_validated_then_expectancy() -> None:
     state = seed_strategy_pool(now_ms=123)
     regime, vol, funding = state.entries
@@ -138,7 +156,10 @@ def test_pool_ranking_prefers_validated_then_expectancy() -> None:
     )
 
     ranked = pool_runtime.rank_pool_entries((regime, vol, funding))
-    assert ranked[0].strategy_id == VOLATILITY_BREAKOUT_STRATEGY_ID
-    assert ranked[0].rank == 1
-    assert ranked[1].strategy_id == REGIME_SPECIALIST_STRATEGY_ID
-    assert Decimal(str(ranked[1].metrics["expectancy_r"])) == Decimal("0.20")
+    rank_by_id = {entry.strategy_id: entry.rank for entry in ranked}
+    assert rank_by_id[VOLATILITY_BREAKOUT_STRATEGY_ID] == 1
+    assert rank_by_id[REGIME_SPECIALIST_STRATEGY_ID] == 2
+    regime_after = next(
+        entry for entry in ranked if entry.strategy_id == REGIME_SPECIALIST_STRATEGY_ID
+    )
+    assert Decimal(str(regime_after.metrics["expectancy_r"])) == Decimal("0.20")

@@ -21,6 +21,8 @@ from crypto_scanner.strategy_promotion_runtime import (
     _strategy_signal_ids,
 )
 
+MIN_RANKING_SAMPLE = 10
+
 
 def _now_ms() -> int:
     return time.time_ns() // 1_000_000
@@ -184,9 +186,17 @@ def rank_pool_entries(
             entry.strategy_id,
         )
 
-    ordered = sorted(entries, key=key)
+    eligible = [
+        entry
+        for entry in entries
+        if int(entry.metrics.get("sample_size") or 0) >= MIN_RANKING_SAMPLE
+    ]
+    rank_by_id = {
+        entry.strategy_id: index
+        for index, entry in enumerate(sorted(eligible, key=key), start=1)
+    }
     return tuple(
-        replace(entry, rank=index) for index, entry in enumerate(ordered, start=1)
+        replace(entry, rank=rank_by_id.get(entry.strategy_id)) for entry in entries
     )
 
 
@@ -223,6 +233,8 @@ def evaluate_strategy_pool(
                     **evidence,
                     "environment": "BINANCE_FUTURES_DEMO",
                     "safety_incident_count": incidents,
+                    "ranking_min_closed_trades": MIN_RANKING_SAMPLE,
+                    "ranking_eligible": gate.metrics.sample_size >= MIN_RANKING_SAMPLE,
                     "real_money_trading_enabled": False,
                 },
                 live_trading_locked=True,
