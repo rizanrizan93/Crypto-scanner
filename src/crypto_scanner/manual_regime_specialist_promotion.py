@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
 
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.regime_specialist_demo import REGIME_SPECIALIST_STRATEGY_ID
@@ -37,9 +36,7 @@ def promote_regime_specialist_to_forward_demo() -> StrategyPromotionState:
             return current
         if current.candidate and current.candidate.strategy_id == REGIME_SPECIALIST_STRATEGY_ID:
             return current
-        historical_id = (
-            str((current.historical_evidence or {}).get("strategy_id") or "")
-        )
+        historical_id = str((current.historical_evidence or {}).get("strategy_id") or "")
         if historical_id == REGIME_SPECIALIST_STRATEGY_ID and current.stage in {
             PromotionStage.ROLLED_BACK,
             PromotionStage.QUARANTINED,
@@ -101,7 +98,7 @@ def promote_regime_specialist_to_forward_demo() -> StrategyPromotionState:
 def main() -> None:
     state = promote_regime_specialist_to_forward_demo()
     payload = state.to_dict()
-    # Avoid serializing dataclass internals or any credentials; state is non-secret.
+    # Avoid serializing credentials; promotion state itself is non-secret.
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
 
 
