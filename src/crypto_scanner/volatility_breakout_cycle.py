@@ -30,7 +30,10 @@ from crypto_scanner.hot_watch import select_hot_candidates
 from crypto_scanner.lifecycle import recover_authoritative_state
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.safety import SafetyContract
-from crypto_scanner.scanner_cycle import candidate_account_skip_reason, evaluate_account_execution_gate
+from crypto_scanner.scanner_cycle import (
+    candidate_account_skip_reason,
+    evaluate_account_execution_gate,
+)
 from crypto_scanner.stack_recovery import recover_stack_transactions
 from crypto_scanner.stack_store import DurableStackStore
 from crypto_scanner.strategy_params import load_strategy_parameters
