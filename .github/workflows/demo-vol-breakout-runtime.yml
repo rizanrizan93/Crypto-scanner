@@ -1,0 +1,83 @@
+name: Crypto Scanner Volatility Breakout Demo Runtime
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/crypto_scanner/volatility_breakout_demo.py"
+      - "src/crypto_scanner/volatility_breakout_cycle.py"
+      - "tests/test_volatility_breakout_demo.py"
+      - ".github/workflows/demo-vol-breakout-runtime.yml"
+  schedule:
+    # D1 signal lane: once daily after the UTC daily candle is closed.
+    - cron: "25 0 * * *"
+  workflow_dispatch:
+    inputs:
+      enable_demo_orders:
+        description: "Allow one explicitly requested Vol30/15 VT20 Binance Demo cycle"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-scanner-demo-vol-breakout-runtime
+  cancel-in-progress: false
+
+jobs:
+  volatility-breakout-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
+      BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
+      CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
+      CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e '.[dev]'
+      - name: Verify required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BINANCE_DEMO_API_KEY}"
+          test -n "${BINANCE_DEMO_API_SECRET}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Disarmed Phase 6 pre-audit
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
+      - name: Clean scanner-owned flat-symbol protectors
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-lifecycle-maintenance
+      - name: Run Vol30/15 VT20 parallel Demo cycle
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: python -m crypto_scanner.volatility_breakout_cycle
+      - name: Run fail-safe protection manager
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-profit-lock-watch
+      - name: Push validation is disarmed
+        if: github.event_name == 'push'
+        run: echo "Vol30/15 VT20 lane installed; push validation cannot place Demo orders."
+      - name: Disarmed Phase 6 post-audit
+        if: always()
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
