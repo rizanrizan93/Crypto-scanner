@@ -34,13 +34,13 @@ REGIME_FORWARD_DEMO_STAGE = "FORWARD_DEMO"
 
 class DemoPoolStatus(StrEnum):
     FORWARD_DEMO_ACTIVE = "FORWARD_DEMO_ACTIVE"
-    LIVE_CANDIDATE = "LIVE_CANDIDATE"
+    DEMO_VALIDATED = "DEMO_VALIDATED"
     DEMO_ROLLED_BACK = "DEMO_ROLLED_BACK"
     DEMO_QUARANTINED = "DEMO_QUARANTINED"
 
     @property
     def execution_authorized(self) -> bool:
-        return self in {self.FORWARD_DEMO_ACTIVE, self.LIVE_CANDIDATE}
+        return self in {self.FORWARD_DEMO_ACTIVE, self.DEMO_VALIDATED}
 
 
 @dataclass(frozen=True, slots=True)
