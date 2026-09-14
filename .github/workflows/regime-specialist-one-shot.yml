@@ -1,0 +1,67 @@
+name: Crypto Regime Specialist One Shot Demo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/regime-specialist-one-shot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-scanner-demo-runtime-scanner
+  cancel-in-progress: false
+
+jobs:
+  one-shot-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BINANCE_DEMO_API_KEY: ${{ secrets.BINANCE_DEMO_API_KEY }}
+      BINANCE_DEMO_API_SECRET: ${{ secrets.BINANCE_DEMO_API_SECRET }}
+      CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
+      CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+      - name: Verify Demo secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BINANCE_DEMO_API_KEY}"
+          test -n "${BINANCE_DEMO_API_SECRET}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+      - name: Reconcile existing Demo lifecycle
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-lifecycle-maintenance
+      - name: Pre-entry fail-closed audit
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
+      - name: Authorize regime specialist Forward Demo
+        run: python -m crypto_scanner.manual_regime_specialist_promotion
+      - name: Execute exactly one regime-specialist Demo cycle
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: python -m crypto_scanner.regime_specialist_cycle
+      - name: Run serialized profit-lock protection tick
+        if: always()
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
+        run: crypto-scanner-profit-lock-watch
+      - name: Post-entry fail-closed audit
+        if: always()
+        env:
+          CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+        run: crypto-scanner-phase6-audit
