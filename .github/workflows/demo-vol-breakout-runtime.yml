@@ -9,9 +9,6 @@ on:
       - "src/crypto_scanner/volatility_breakout_cycle.py"
       - "tests/test_volatility_breakout_demo.py"
       - ".github/workflows/demo-vol-breakout-runtime.yml"
-  schedule:
-    # D1 signal lane: once daily after the UTC daily candle is closed.
-    - cron: "25 0 * * *"
   workflow_dispatch:
     inputs:
       enable_demo_orders:
@@ -23,8 +20,9 @@ on:
 permissions:
   contents: read
 
+# Manual writer access shares the same lock as the primary multi-strategy runtime.
 concurrency:
-  group: crypto-scanner-demo-vol-breakout-runtime
+  group: crypto-scanner-demo-runtime-scanner
   cancel-in-progress: false
 
 jobs:
@@ -59,23 +57,23 @@ jobs:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
       - name: Clean scanner-owned flat-symbol protectors
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        if: github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         run: crypto-scanner-lifecycle-maintenance
       - name: Run Vol30/15 VT20 parallel Demo cycle
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        if: github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         run: python -m crypto_scanner.volatility_breakout_cycle
       - name: Run fail-safe protection manager
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)
+        if: github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ENABLED
         run: crypto-scanner-profit-lock-watch
       - name: Push validation is disarmed
         if: github.event_name == 'push'
-        run: echo "Vol30/15 VT20 lane installed; push validation cannot place Demo orders."
+        run: echo "Vol30/15 VT20 lane is executed by the shared multi-strategy runtime."
       - name: Disarmed Phase 6 post-audit
         if: always()
         env:
