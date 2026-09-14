@@ -74,8 +74,8 @@ jobs:
       - name: Run Demo acquisition and calibration-data cycle
         # Demo/Testnet remains the research collection environment. Historical
         # HISTORICAL_PENDING/HISTORICAL_REJECTED data remain collection-only and do
-        # not receive FORWARD_DEMO promotion credit. Parallel challenger lanes have
-        # explicit strategy IDs and cannot unlock LIVE trading.
+        # not receive FORWARD_DEMO promotion credit. QUARANTINED remains fail-closed.
+        # Parallel challenger lanes have explicit strategy IDs and cannot unlock LIVE.
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
           CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
