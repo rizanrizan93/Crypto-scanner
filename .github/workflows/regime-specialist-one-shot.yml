@@ -12,7 +12,9 @@ permissions:
 
 concurrency:
   group: crypto-scanner-demo-runtime-scanner
-  cancel-in-progress: false
+  # This explicit user-authorized one-shot supersedes the older legacy continuous
+  # Demo acquisition lane so old-strategy entries cannot race the promoted challenger.
+  cancel-in-progress: true
 
 jobs:
   one-shot-demo:
