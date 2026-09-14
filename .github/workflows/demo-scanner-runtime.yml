@@ -75,7 +75,8 @@ jobs:
         # Demo/Testnet remains the research collection environment. Historical
         # HISTORICAL_PENDING/HISTORICAL_REJECTED data remain collection-only and do
         # not receive FORWARD_DEMO promotion credit. QUARANTINED remains fail-closed.
-        # Parallel challenger lanes have explicit strategy IDs and cannot unlock LIVE.
+        # The durable strategy pool may validate or demote each lane independently;
+        # it cannot unlock LIVE or real-money trading.
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
           CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
@@ -105,7 +106,8 @@ jobs:
 
             echo "--- Regime Specialist 28D25 ---"
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
-              python -m crypto_scanner.regime_specialist_cycle || protect_and_fail
+              python -m crypto_scanner.strategy_pool_cycle \
+              strategy-regime-specialist-28d25-v1 || protect_and_fail
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
 
             # D1 challenger lanes are evaluated once per hourly acquisition window.
@@ -114,12 +116,14 @@ jobs:
             if [ "${cycle}" -eq 1 ]; then
               echo "--- Volatility Breakout 30/15 VT20 ---"
               CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
-                python -m crypto_scanner.volatility_breakout_cycle || protect_and_fail
+                python -m crypto_scanner.strategy_pool_cycle \
+                strategy-vol-breakout-30-15-vt20-v1 || protect_and_fail
               CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
 
               echo "--- Funding Z2 + OI expansion >=2% ---"
               CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
-                python -m crypto_scanner.funding_oi_cycle || protect_and_fail
+                python -m crypto_scanner.strategy_pool_cycle \
+                strategy-funding-z2-oi2-v1 || protect_and_fail
               CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
             fi
 
