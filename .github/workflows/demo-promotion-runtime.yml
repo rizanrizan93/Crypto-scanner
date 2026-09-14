@@ -8,6 +8,9 @@ on:
       - "src/crypto_scanner/strategy_params.py"
       - "src/crypto_scanner/strategy_promotion.py"
       - "src/crypto_scanner/strategy_promotion_runtime.py"
+      - "src/crypto_scanner/strategy_promotion_historical_only.py"
+      - "src/crypto_scanner/strategy_pool.py"
+      - "src/crypto_scanner/strategy_pool_runtime.py"
       - ".github/workflows/demo-promotion-runtime.yml"
   schedule:
     - cron: "7 * * * *"
@@ -47,8 +50,10 @@ jobs:
       - name: Heartbeat running
         continue-on-error: true
         run: crypto-scanner-heartbeat PROMOTION_CYCLE RUNNING
-      - name: Evaluate historical and forward-Demo promotion gates
-        run: crypto-scanner-strategy-promote
+      - name: Evaluate historical promotion gate only for legacy slot
+        run: python -m crypto_scanner.strategy_promotion_historical_only
+      - name: Evaluate independent forward-Demo gates for strategy pool
+        run: python -m crypto_scanner.strategy_pool_runtime
       - name: Heartbeat success
         if: success()
         continue-on-error: true
