@@ -26,6 +26,7 @@ on:
 permissions:
   contents: read
 
+# Every exchange-writing strategy is serialized through one account-wide writer lock.
 concurrency:
   group: crypto-scanner-demo-runtime-scanner
   cancel-in-progress: false
@@ -72,10 +73,9 @@ jobs:
         run: python -m crypto_scanner.manual_regime_specialist_promotion
       - name: Run Demo acquisition and calibration-data cycle
         # Demo/Testnet remains the research collection environment. Historical
-        # HISTORICAL_PENDING/HISTORICAL_REJECTED data are still explicitly marked as
-        # collection-only and do not receive FORWARD_DEMO promotion credit. The new
-        # regime challenger itself runs only after explicit FORWARD_DEMO promotion,
-        # while QUARANTINED remains fail-closed and LIVE stays locked.
+        # HISTORICAL_PENDING/HISTORICAL_REJECTED data remain collection-only and do
+        # not receive FORWARD_DEMO promotion credit. QUARANTINED remains fail-closed.
+        # Parallel challenger lanes have explicit strategy IDs and cannot unlock LIVE.
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
           CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${CRYPTO_SCANNER_TESTNET_EXECUTION}" != "ENABLED" ]; then
-            echo "Push validation is disarmed; promotion/configuration only."
+            echo "Push validation is disarmed; strategy configuration only."
             exit 0
           fi
 
@@ -93,14 +93,36 @@ jobs:
             total_cycles=1
           fi
 
+          protect_and_fail() {
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
+            exit 1
+          }
+
           for cycle in $(seq 1 "${total_cycles}"); do
             cycle_started=$(date +%s)
-            echo "=== Regime specialist Demo cycle ${cycle}/${total_cycles} ==="
+            echo "=== Multi-strategy Demo cycle ${cycle}/${total_cycles} ==="
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-lifecycle-maintenance
-            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED python -m crypto_scanner.regime_specialist_cycle
 
-            # Keep the existing fail-safe protection manager serialized with acquisition.
+            echo "--- Regime Specialist 28D25 ---"
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
+              python -m crypto_scanner.regime_specialist_cycle || protect_and_fail
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
+
+            # D1 challenger lanes are evaluated once per hourly acquisition window.
+            # Their daily signal state remains fixed, while hourly microstructure can
+            # decide whether an eligible daily leg is actually safe to enter.
+            if [ "${cycle}" -eq 1 ]; then
+              echo "--- Volatility Breakout 30/15 VT20 ---"
+              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
+                python -m crypto_scanner.volatility_breakout_cycle || protect_and_fail
+              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
+
+              echo "--- Funding Z2 + OI expansion >=2% ---"
+              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
+                python -m crypto_scanner.funding_oi_cycle || protect_and_fail
+              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
+            fi
+
             crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
 
             if [ "${cycle}" -lt "${total_cycles}" ]; then
