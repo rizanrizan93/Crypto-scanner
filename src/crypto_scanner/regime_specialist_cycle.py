@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
-from decimal import Decimal
 
 from crypto_scanner.binance.auth import BinanceDemoCredentials
 from crypto_scanner.binance.microstructure import (
@@ -20,7 +19,11 @@ from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
 from crypto_scanner.discovery_pipeline import DiscoveryPipeline, MicrostructureSnapshot
 from crypto_scanner.durable_execution import DurableExecutionCoordinator, DurableExecutionError
-from crypto_scanner.execution_plan import ExecutionPlanError, TestnetExecutionArm, build_entry_order_plan
+from crypto_scanner.execution_plan import (
+    ExecutionPlanError,
+    TestnetExecutionArm,
+    build_entry_order_plan,
+)
 from crypto_scanner.fast_lane import FastLaneEvidence, evaluate_execution_readiness
 from crypto_scanner.hot_watch import select_hot_candidates
 from crypto_scanner.lifecycle import recover_authoritative_state
@@ -215,14 +218,7 @@ def run_regime_specialist_cycle() -> RegimeSpecialistCycleResult:
                     geometry_created_at_ms=now_ms,
                     strategy_id=REGIME_SPECIALIST_STRATEGY_ID,
                     promotion_stage=PromotionStage.FORWARD_DEMO.value,
-                    strategy_params={
-                        **strategy_runtime.params.to_dict(),
-                        "global_regime": decision.regime.value,
-                        "bear_lookback_days": "28",
-                        "bear_rebalance": "WEEKLY_SUNDAY_CLOSE",
-                        "bear_risk_multiplier": "0.25",
-                        "execution_adapter": "REGIME_SPECIALIST_DEMO_V1",
-                    },
+                    strategy_params=strategy_runtime.params.to_dict(),
                 )
 
                 build_entry_order_plan(
