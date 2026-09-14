@@ -68,18 +68,19 @@ jobs:
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
         run: crypto-scanner-phase6-audit
-      - name: Run Demo acquisition and calibration-data cycle
-        # Demo/Testnet is the research data-collection environment. Scheduled and
-        # explicitly armed manual cycles may place Demo orders even while a candidate
-        # is HISTORICAL_PENDING/HISTORICAL_REJECTED. The promotion stage is preserved,
-        # QUARANTINED remains fail-closed, and these research trades receive no
-        # FORWARD_DEMO promotion credit until the historical gate is passed.
+      - name: Promote regime specialist to Forward Demo
+        run: python -m crypto_scanner.manual_regime_specialist_promotion
+      - name: Run regime-specialist Demo acquisition cycle
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
-          CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${CRYPTO_SCANNER_TESTNET_EXECUTION}" != "ENABLED" ]; then
+            echo "Push validation is disarmed; promotion/configuration only."
+            exit 0
+          fi
+
           total_cycles=12
           profit_lock_tick_seconds=60
           if [ "${GITHUB_EVENT_NAME}" != "schedule" ] && [ "${{ inputs.continuous_window }}" != "true" ]; then
@@ -88,13 +89,11 @@ jobs:
 
           for cycle in $(seq 1 "${total_cycles}"); do
             cycle_started=$(date +%s)
-            echo "=== Demo scanner cycle ${cycle}/${total_cycles}; execution=${CRYPTO_SCANNER_TESTNET_EXECUTION}; data_collection=${CRYPTO_SCANNER_DEMO_DATA_COLLECTION} ==="
+            echo "=== Regime specialist Demo cycle ${cycle}/${total_cycles} ==="
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-lifecycle-maintenance
-            crypto-scanner-cycle
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED python -m crypto_scanner.regime_specialist_cycle
 
-            # The managed scanner injects the same serialized profit-lock tick after
-            # each 60s Fast Watch sleep. This immediate tick closes the timing gap when
-            # acquisition returns early or just opened a new position.
+            # Keep the existing fail-safe protection manager serialized with acquisition.
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
             crypto-scanner-heartbeat SCANNER_CYCLE RUNNING || true
 
@@ -103,9 +102,6 @@ jobs:
               elapsed=$((cycle_finished - cycle_started))
               remaining=$((300 - elapsed))
 
-              # Keep position management at ~1 minute during the otherwise idle part
-              # of the 5-minute acquisition window. Calls are serialized in this job;
-              # no second exchange writer runs concurrently with acquisition.
               while [ "${remaining}" -gt "${profit_lock_tick_seconds}" ]; do
                 sleep "${profit_lock_tick_seconds}"
                 CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
