@@ -70,9 +70,15 @@ jobs:
         run: crypto-scanner-phase6-audit
       - name: Promote regime specialist to Forward Demo
         run: python -m crypto_scanner.manual_regime_specialist_promotion
-      - name: Run regime-specialist Demo acquisition cycle
+      - name: Run Demo acquisition and calibration-data cycle
+        # Demo/Testnet remains the research collection environment. Historical
+        # HISTORICAL_PENDING/HISTORICAL_REJECTED data are still explicitly marked as
+        # collection-only and do not receive FORWARD_DEMO promotion credit. The new
+        # regime challenger itself runs only after explicit FORWARD_DEMO promotion,
+        # while QUARANTINED remains fail-closed and LIVE stays locked.
         env:
           CRYPTO_SCANNER_TESTNET_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
+          CRYPTO_SCANNER_DEMO_DATA_COLLECTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.enable_demo_orders)) && 'ENABLED' || 'DISABLED' }}
         shell: bash
         run: |
           set -euo pipefail
