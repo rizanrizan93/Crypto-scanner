@@ -148,7 +148,10 @@ def _fixed_weight_portfolio_vol(
         return_maps[symbol] = mapping
         timestamps.update(mapping)
 
-    recent = sorted(timestamp for timestamp in timestamps if timestamp <= as_of_ms)[-VOL_TARGET_LOOKBACK:]
+    recent_candidates = sorted(
+        timestamp for timestamp in timestamps if timestamp <= as_of_ms
+    )
+    recent = recent_candidates[-VOL_TARGET_LOOKBACK:]
     portfolio_returns: list[float] = []
     for timestamp in recent:
         total = 0.0
