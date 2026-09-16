@@ -79,6 +79,19 @@ def _leg_label(leg: VolatilityBreakoutLeg) -> str:
     return f"{leg.symbol}:{leg.direction.value}:{leg.target_weight}"
 
 
+def _scope_discovery_to_active_symbols(results, active_symbols: frozenset[str]):
+    """Keep strategy legs from being starved by unrelated global Top-N candidates.
+
+    Direction is intentionally not filtered here. In DEMO acquisition mode a WATCH
+    row can be promoted by ``select_hot_candidates`` after its tradable direction
+    is inferred from the long/short score separation. The exact strategy direction
+    is enforced afterwards by ``filter_volatility_breakout_candidates``.
+    """
+    if not active_symbols:
+        return ()
+    return tuple(result for result in results if result.symbol.upper() in active_symbols)
+
+
 def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
     safety = SafetyContract()
     safety.validate()
@@ -137,7 +150,9 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
 
         discovery = DiscoveryPipeline(public, universe=runtime.universe).run(discovery_micro)
         run_id = linkage.save_discovery_run(discovery, execution_armed=True)
-        hot = select_hot_candidates(discovery.results)
+        active_symbols = frozenset(leg.symbol.upper() for leg in decision.legs)
+        strategy_results = _scope_discovery_to_active_symbols(discovery.results, active_symbols)
+        hot = select_hot_candidates(strategy_results)
         eligible = filter_volatility_breakout_candidates(hot, decision)
         eligible_symbols = tuple(candidate.symbol for candidate in eligible)
 
