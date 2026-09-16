@@ -1,0 +1,53 @@
+name: Crypto Scanner Strategy Forward Evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/crypto_scanner/strategy_forward_evidence.py"
+      - "src/crypto_scanner/strategy_pool_runtime.py"
+      - "supabase/migrations/20260916074500_strategy_forward_evidence_v1.sql"
+      - ".github/workflows/demo-strategy-forward-evidence.yml"
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-scanner-strategy-forward-evidence
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CRYPTO_SCANNER_SUPABASE_URL: ${{ secrets.CRYPTO_SCANNER_SUPABASE_URL }}
+      CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY }}
+      CRYPTO_SCANNER_TESTNET_EXECUTION: DISABLED
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e .
+
+      - name: Verify observer-only environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CRYPTO_SCANNER_SUPABASE_URL}"
+          test -n "${CRYPTO_SCANNER_SUPABASE_SERVICE_ROLE_KEY}"
+          test "${CRYPTO_SCANNER_TESTNET_EXECUTION}" = "DISABLED"
+
+      - name: Record prospective strategy paper evidence
+        run: crypto-scanner-strategy-forward-evidence
