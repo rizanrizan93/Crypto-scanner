@@ -72,6 +72,7 @@ class ForwardRest(SupabaseRestClient):
             "signal_geometry",
             "strategy_forward_evaluations",
             "strategy_paper_trades",
+            "runtime_state",
         }
     )
 
@@ -109,11 +110,14 @@ class ForwardRest(SupabaseRestClient):
     ) -> None:
         if not rows:
             return
+        # REST JSON must not receive Decimal objects directly. String encoding also
+        # preserves exact financial values rather than converting through float.
+        payload = json.loads(json.dumps(rows, default=str))
         response = self._client.post(
             f"{self.base_url}/rest/v1/{table}",
             params={"on_conflict": on_conflict},
             headers=self._headers(prefer="resolution=ignore-duplicates,return=minimal"),
-            json=rows,
+            json=payload,
         )
         if response.is_error:
             raise PersistenceError(
@@ -154,14 +158,72 @@ def _strategy_tf(strategy_id: str, evidence: dict[str, object]) -> str:
     return _STRATEGY_TIMEFRAME.get(strategy_id, "M3_M5")
 
 
-def _recent_signals(rest: ForwardRest, now_ms: int) -> tuple[dict[str, object], ...]:
+def ensure_observer_start(rest: ForwardRest, *, now_ms: int) -> int:
+    rows = rest.select(
+        "runtime_state",
+        {
+            "select": "version,state",
+            "state_key": f"eq.{FORWARD_STATE_KEY}",
+            "limit": "1",
+        },
+        operation="STRATEGY_FORWARD_STATE",
+    )
+    if rows:
+        state = rows[0].get("state")
+        if not isinstance(state, dict):
+            raise PersistenceError("strategy forward runtime state is malformed")
+        started = int(state.get("observer_started_at_ms") or 0)
+        if started <= 0:
+            raise PersistenceError("strategy forward observer start is missing")
+        return started
+
+    initial = {
+        "schema_version": FORWARD_SCHEMA_VERSION,
+        "observer_started_at_ms": now_ms,
+        "generated_at_ms": now_ms,
+        "closed_paper_trades": 0,
+        "entry_policy": "NEXT_5M_OPEN",
+        "intrabar_conflict_policy": "SL_FIRST",
+        "round_trip_cost_bps": str(BASELINE_ROUND_TRIP_COST_BPS),
+        "execution_influence": False,
+        "promotion_authority": False,
+        "by_strategy": {},
+        "by_strategy_symbol": {},
+        "by_strategy_timeframe": {},
+        "by_strategy_regime": {},
+        "by_strategy_direction": {},
+        "by_full_slice": {},
+    }
+    rest.upsert(
+        "runtime_state",
+        (
+            {
+                "state_key": FORWARD_STATE_KEY,
+                "version": 1,
+                "state": initial,
+                "updated_at_ms": now_ms,
+            },
+        ),
+        on_conflict=("state_key",),
+    )
+    return now_ms
+
+
+def _recent_signals(
+    rest: ForwardRest,
+    *,
+    now_ms: int,
+    floor_ms: int,
+) -> tuple[dict[str, object], ...]:
     output: list[dict[str, object]] = []
-    cutoff = max(0, now_ms - LOOKBACK_MS)
+    cutoff = max(floor_ms, now_ms - LOOKBACK_MS)
     for offset in range(0, 10_000, PAGE_SIZE):
         page = rest.select(
             "signals",
             {
-                "select": "signal_id,symbol,direction,setup,regime,status,score,created_at_ms,evidence",
+                "select": (
+                    "signal_id,symbol,direction,setup,regime,status,score,created_at_ms,evidence"
+                ),
                 "created_at_ms": f"gte.{cutoff}",
                 "order": "created_at_ms.asc",
                 "limit": str(PAGE_SIZE),
@@ -180,11 +242,37 @@ def _recent_signals(rest: ForwardRest, now_ms: int) -> tuple[dict[str, object], 
     return tuple(output)
 
 
+def _existing_source_signal_ids(
+    rest: ForwardRest,
+    *,
+    floor_ms: int,
+) -> frozenset[str]:
+    output: list[str] = []
+    for offset in range(0, 10_000, PAGE_SIZE):
+        page = rest.select(
+            "strategy_forward_evaluations",
+            {
+                "select": "source_signal_id",
+                "signal_created_at_ms": f"gte.{floor_ms}",
+                "order": "signal_created_at_ms.asc",
+                "limit": str(PAGE_SIZE),
+                "offset": str(offset),
+            },
+            operation="STRATEGY_FORWARD_EXISTING_EVALUATIONS",
+        )
+        output.extend(str(row["source_signal_id"]) for row in page if row.get("source_signal_id"))
+        if len(page) < PAGE_SIZE:
+            break
+    return frozenset(output)
+
+
 def _geometry(rest: ForwardRest, signal_id: str) -> dict[str, object] | None:
     rows = rest.select(
         "signal_geometry",
         {
-            "select": "signal_id,entry_mode,entry_price,stop_loss,tp1,tp2,rr_tp2,geometry_created_at_ms",
+            "select": (
+                "signal_id,entry_mode,entry_price,stop_loss,tp1,tp2,rr_tp2,geometry_created_at_ms"
+            ),
             "signal_id": f"eq.{signal_id}",
             "limit": "1",
         },
@@ -193,11 +281,25 @@ def _geometry(rest: ForwardRest, signal_id: str) -> dict[str, object] | None:
     return rows[0] if rows else None
 
 
-def sync_signal_evaluations(rest: ForwardRest, *, now_ms: int) -> tuple[int, int]:
-    source = _recent_signals(rest, now_ms)
+def sync_signal_evaluations(
+    rest: ForwardRest,
+    *,
+    now_ms: int,
+    observer_started_at_ms: int,
+) -> tuple[int, int]:
+    source = _recent_signals(
+        rest,
+        now_ms=now_ms,
+        floor_ms=observer_started_at_ms,
+    )
+    existing = _existing_source_signal_ids(
+        rest,
+        floor_ms=observer_started_at_ms,
+    )
+    new_source = tuple(row for row in source if str(row.get("signal_id") or "") not in existing)
     evaluations: list[dict[str, object]] = []
     papers: list[dict[str, object]] = []
-    for signal in source:
+    for signal in new_source:
         signal_id = str(signal.get("signal_id") or "")
         evidence_raw = signal.get("evidence")
         if not signal_id or not isinstance(evidence_raw, dict):
@@ -271,7 +373,7 @@ def sync_signal_evaluations(rest: ForwardRest, *, now_ms: int) -> tuple[int, int
                 },
             }
         )
-    # Immutable seeds: never merge an old seed over OPEN/CLOSED lifecycle state.
+    # Seeds are immutable. Repeated cycles must never overwrite OPEN/CLOSED state.
     rest.insert_ignore(
         "strategy_forward_evaluations",
         tuple(evaluations),
@@ -416,7 +518,9 @@ def _advance(
             elif target_hit:
                 exit_reason, exit_price, gross_r = "TAKE_PROFIT_2", tp2, (entry - tp2) / risk
         if exit_reason is not None:
-            exit_time = bar.start_time_ms
+            # Intrabar timestamp is unknown from OHLC. Use completed-bar timestamp,
+            # never bar open, so evidence does not claim knowledge before it existed.
+            exit_time = bar.start_time_ms + BAR_MS
             last_processed = bar.start_time_ms
             break
 
@@ -504,7 +608,17 @@ def _closed_papers(rest: ForwardRest) -> tuple[dict[str, object], ...]:
 def calculate_forward_metrics(rows: tuple[dict[str, object], ...]) -> ForwardMetrics:
     if not rows:
         return ForwardMetrics(
-            0, 0, 0, Decimal(0), Decimal(0), None, Decimal(0), Decimal(0), Decimal(0), Decimal(0), 0
+            0,
+            0,
+            0,
+            Decimal(0),
+            Decimal(0),
+            None,
+            Decimal(0),
+            Decimal(0),
+            Decimal(0),
+            Decimal(0),
+            0,
         )
     ordered = sorted(rows, key=lambda row: int(row["exit_time_ms"]))
     results = tuple(Decimal(str(row["net_result_r"])) for row in ordered)
@@ -527,8 +641,12 @@ def calculate_forward_metrics(rows: tuple[dict[str, object], ...]) -> ForwardMet
         expectancy_r=sum(results, Decimal(0)) / count,
         profit_factor=gross_profit / gross_loss if gross_loss > 0 else None,
         max_drawdown_r=drawdown,
-        average_mfe_r=sum((Decimal(str(row.get("mfe_r") or 0)) for row in rows), Decimal(0)) / count,
-        average_mae_r=sum((Decimal(str(row.get("mae_r") or 0)) for row in rows), Decimal(0)) / count,
+        average_mfe_r=(
+            sum((Decimal(str(row.get("mfe_r") or 0)) for row in rows), Decimal(0)) / count
+        ),
+        average_mae_r=(
+            sum((Decimal(str(row.get("mae_r") or 0)) for row in rows), Decimal(0)) / count
+        ),
         tp1_touch_rate=Decimal(sum(bool(row.get("tp1_touched")) for row in rows)) / count,
         average_holding_ms=sum(holds) // len(holds),
     )
@@ -544,9 +662,15 @@ def _slice(rows: tuple[dict[str, object], ...], keys: tuple[str, ...]) -> dict[s
     }
 
 
-def build_forward_summary(rows: tuple[dict[str, object], ...], now_ms: int) -> dict[str, object]:
+def build_forward_summary(
+    rows: tuple[dict[str, object], ...],
+    *,
+    now_ms: int,
+    observer_started_at_ms: int,
+) -> dict[str, object]:
     return {
         "schema_version": FORWARD_SCHEMA_VERSION,
+        "observer_started_at_ms": observer_started_at_ms,
         "generated_at_ms": now_ms,
         "closed_paper_trades": len(rows),
         "entry_policy": "NEXT_5M_OPEN",
@@ -618,13 +742,29 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
         ForwardRest(config) as rest,
         BinanceDemoPublicRestClient(base_url=runtime.binance_rest_url) as market,
     ):
-        evaluations, source_signals = sync_signal_evaluations(rest, now_ms=timestamp)
+        observer_started_at_ms = ensure_observer_start(rest, now_ms=timestamp)
+        evaluations, source_signals = sync_signal_evaluations(
+            rest,
+            now_ms=timestamp,
+            observer_started_at_ms=observer_started_at_ms,
+        )
         opened, closed_now, failures = advance_paper_lifecycle(rest, market, now_ms=timestamp)
         closed_rows = _closed_papers(rest)
-        summary = build_forward_summary(closed_rows, timestamp)
+        summary = build_forward_summary(
+            closed_rows,
+            now_ms=timestamp,
+            observer_started_at_ms=observer_started_at_ms,
+        )
         rest.upsert(
             "runtime_state",
-            ({"state_key": FORWARD_STATE_KEY, "version": 1, "state": summary, "updated_at_ms": timestamp},),
+            (
+                {
+                    "state_key": FORWARD_STATE_KEY,
+                    "version": 1,
+                    "state": summary,
+                    "updated_at_ms": timestamp,
+                },
+            ),
             on_conflict=("state_key",),
         )
         rest.upsert(
@@ -637,8 +777,9 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
                     "git_sha": os.getenv("GITHUB_SHA", "LOCAL"),
                     "details": {
                         "schema_version": FORWARD_SCHEMA_VERSION,
+                        "observer_started_at_ms": observer_started_at_ms,
                         "source_strategy_signals": source_signals,
-                        "evaluations_synced": evaluations,
+                        "new_evaluations": evaluations,
                         "paper_opened": opened,
                         "paper_closed_now": closed_now,
                         "paper_failures": failures,
@@ -652,9 +793,14 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
             on_conflict=("component",),
         )
     return {
-        "status": "PASS_STRATEGY_FORWARD_EVIDENCE" if failures == 0 else "DEGRADED_STRATEGY_FORWARD_EVIDENCE",
+        "status": (
+            "PASS_STRATEGY_FORWARD_EVIDENCE"
+            if failures == 0
+            else "DEGRADED_STRATEGY_FORWARD_EVIDENCE"
+        ),
+        "observer_started_at_ms": observer_started_at_ms,
         "source_strategy_signals": source_signals,
-        "evaluations_synced": evaluations,
+        "new_evaluations": evaluations,
         "paper_opened": opened,
         "paper_closed_now": closed_now,
         "paper_failures": failures,
