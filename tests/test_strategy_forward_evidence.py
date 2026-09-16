@@ -1,7 +1,5 @@
 from decimal import Decimal
 
-import pytest
-
 from crypto_scanner.market_models import Candle
 from crypto_scanner.strategy_forward_evidence import (
     BAR_MS,
