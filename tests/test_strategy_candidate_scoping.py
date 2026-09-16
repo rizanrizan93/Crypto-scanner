@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
+from crypto_scanner.regime_specialist_cycle import _active_strategy_symbols
 from crypto_scanner.regime_specialist_cycle import (
-    _active_strategy_symbols,
     _scope_discovery_to_active_symbols as scope_regime,
 )
 from crypto_scanner.regime_specialist_demo import GlobalRegime, RegimeSpecialistDecision
