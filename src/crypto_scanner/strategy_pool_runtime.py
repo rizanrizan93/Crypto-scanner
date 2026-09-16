@@ -6,6 +6,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
+from crypto_scanner.strategy_forward_evidence import paper_forward_results
 from crypto_scanner.strategy_pool import (
     DemoPoolStatus,
     StrategyPoolEntry,
@@ -221,6 +222,24 @@ def evaluate_strategy_pool(
             safety_incident_count=incidents,
             evidence_duration_ms=int(duration) if duration is not None else None,
         )
+
+        paper_results, paper_evidence = paper_forward_results(
+            config,
+            entry.strategy_id,
+            promotion_stage=entry.evidence_stage_filter,
+        )
+        paper_duration = paper_evidence.get("paper_evidence_duration_ms")
+        paper_gate = evaluate_forward_demo_gate(
+            paper_results,
+            safety_incident_count=0,
+            evidence_duration_ms=(
+                int(paper_duration) if paper_duration is not None else None
+            ),
+        )
+
+        # Actual Demo fills remain the only status authority in V1. The paper lane
+        # is deliberately wired into the pool as an advisory confirmation gate so
+        # it can be compared continuously without creating a second execution path.
         updated.append(
             replace(
                 entry,
@@ -235,6 +254,16 @@ def evaluate_strategy_pool(
                     "safety_incident_count": incidents,
                     "ranking_min_closed_trades": MIN_RANKING_SAMPLE,
                     "ranking_eligible": gate.metrics.sample_size >= MIN_RANKING_SAMPLE,
+                    "paper_forward": {
+                        **paper_evidence,
+                        "gate_decision": paper_gate.decision,
+                        "gate_reasons": list(paper_gate.reasons),
+                        "gate_metrics": paper_gate.metrics.to_dict(),
+                        "confirmation_ready": paper_gate.decision == "PROMOTE",
+                        "status_authority": False,
+                    },
+                    "paper_confirmation_enabled": True,
+                    "paper_status_authority": False,
                     "real_money_trading_enabled": False,
                 },
                 live_trading_locked=True,
