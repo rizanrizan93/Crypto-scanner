@@ -6,7 +6,6 @@ import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
@@ -25,12 +24,11 @@ FORWARD_STATE_KEY = "strategy_forward_evidence_v1"
 FORWARD_SCHEMA_VERSION = "strategy-forward-evidence-v1"
 WORKER_COMPONENT = "STRATEGY_FORWARD_EVIDENCE"
 EXECUTION_INTERVAL = "5"
-EXECUTION_INTERVAL_MS = 5 * 60_000
-SIGNAL_LOOKBACK_MS = 30 * 24 * 60 * 60_000
-MAX_SIGNAL_PAGES = 20
+BAR_MS = 300_000
+LOOKBACK_MS = 30 * 86_400_000
 PAGE_SIZE = 500
 
-_STRATEGY_TIMEFRAMES = {
+_STRATEGY_TIMEFRAME = {
     REGIME_SPECIALIST_STRATEGY_ID: "D1",
     VOLATILITY_BREAKOUT_STRATEGY_ID: "D1",
     FUNDING_OI_STRATEGY_ID: "D1",
@@ -67,8 +65,8 @@ class ForwardMetrics:
         }
 
 
-class _ForwardRest(SupabaseRestClient):
-    _TABLES = frozenset(
+class ForwardRest(SupabaseRestClient):
+    _READ_TABLES = frozenset(
         {
             "signals",
             "signal_geometry",
@@ -77,15 +75,15 @@ class _ForwardRest(SupabaseRestClient):
         }
     )
 
-    def select_rows(
+    def select(
         self,
         table: str,
         params: dict[str, str],
         *,
         operation: str,
     ) -> tuple[dict[str, object], ...]:
-        if table not in self._TABLES:
-            raise PersistenceError("forward evidence table is not allow-listed")
+        if table not in self._READ_TABLES:
+            raise PersistenceError("forward-evidence table is not allow-listed")
         response = read_with_retry(
             self._client,
             f"{self.base_url}/rest/v1/{table}",
@@ -95,26 +93,44 @@ class _ForwardRest(SupabaseRestClient):
         )
         if response.is_error:
             raise PersistenceError(
-                f"forward evidence read failed table={table} status={response.status_code}"
+                f"forward-evidence read failed table={table} status={response.status_code}"
             )
         payload = response.json()
         if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
-            raise PersistenceError(f"forward evidence payload is invalid table={table}")
+            raise PersistenceError(f"invalid forward-evidence payload table={table}")
         return tuple(payload)
 
-    def patch_paper(self, paper_trade_id: str, fields: dict[str, object]) -> None:
-        if not paper_trade_id.startswith("paper-"):
-            raise PersistenceError("paper trade identity is invalid")
+    def insert_ignore(
+        self,
+        table: str,
+        rows: tuple[dict[str, object], ...],
+        *,
+        on_conflict: str,
+    ) -> None:
+        if not rows:
+            return
+        response = self._client.post(
+            f"{self.base_url}/rest/v1/{table}",
+            params={"on_conflict": on_conflict},
+            headers=self._headers(prefer="resolution=ignore-duplicates,return=minimal"),
+            json=rows,
+        )
+        if response.is_error:
+            raise PersistenceError(
+                f"forward-evidence insert failed table={table} status={response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+    def patch_paper(self, paper_id: str, fields: dict[str, object]) -> None:
         response = self._client.patch(
             f"{self.base_url}/rest/v1/strategy_paper_trades",
-            params={"paper_trade_id": f"eq.{paper_trade_id}"},
+            params={"paper_trade_id": f"eq.{paper_id}"},
             headers=self._headers(prefer="return=minimal"),
             json=fields,
         )
         if response.is_error:
             raise PersistenceError(
-                "paper lifecycle update failed "
-                f"status={response.status_code}: {response.text[:300]}"
+                f"paper update failed status={response.status_code}: {response.text[:300]}"
             )
 
 
@@ -122,116 +138,104 @@ def _now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
-def _stable_id(prefix: str, *parts: object) -> str:
+def _id(prefix: str, *parts: object) -> str:
     raw = "|".join(str(part) for part in parts).encode()
     return f"{prefix}-{hashlib.sha256(raw).hexdigest()[:32]}"
 
 
-def _strategy_timeframe(strategy_id: str, evidence: dict[str, object]) -> str:
+def _dec(value: object | None) -> Decimal | None:
+    return None if value in (None, "") else Decimal(str(value))
+
+
+def _strategy_tf(strategy_id: str, evidence: dict[str, object]) -> str:
     explicit = evidence.get("strategy_timeframe") or evidence.get("timeframe")
     if explicit not in (None, ""):
         return str(explicit).upper()
-    return _STRATEGY_TIMEFRAMES.get(strategy_id, "M3_M5")
+    return _STRATEGY_TIMEFRAME.get(strategy_id, "M3_M5")
 
 
-def _decimal(value: object | None) -> Decimal | None:
-    if value in (None, ""):
-        return None
-    return Decimal(str(value))
-
-
-def _fetch_recent_strategy_signals(
-    rest: _ForwardRest,
-    *,
-    now_ms: int,
-) -> tuple[dict[str, object], ...]:
-    rows: list[dict[str, object]] = []
-    cutoff = max(0, now_ms - SIGNAL_LOOKBACK_MS)
-    for page in range(MAX_SIGNAL_PAGES):
-        batch = rest.select_rows(
+def _recent_signals(rest: ForwardRest, now_ms: int) -> tuple[dict[str, object], ...]:
+    output: list[dict[str, object]] = []
+    cutoff = max(0, now_ms - LOOKBACK_MS)
+    for offset in range(0, 10_000, PAGE_SIZE):
+        page = rest.select(
             "signals",
             {
-                "select": (
-                    "signal_id,symbol,direction,setup,regime,status,score,created_at_ms,evidence"
-                ),
+                "select": "signal_id,symbol,direction,setup,regime,status,score,created_at_ms,evidence",
                 "created_at_ms": f"gte.{cutoff}",
                 "order": "created_at_ms.asc",
                 "limit": str(PAGE_SIZE),
-                "offset": str(page * PAGE_SIZE),
+                "offset": str(offset),
             },
-            operation="FORWARD_SIGNALS",
+            operation="STRATEGY_FORWARD_SIGNALS",
         )
-        for row in batch:
-            evidence = row.get("evidence")
-            if isinstance(evidence, dict) and evidence.get("strategy_id"):
-                rows.append(row)
-        if len(batch) < PAGE_SIZE:
+        output.extend(
+            row
+            for row in page
+            if isinstance(row.get("evidence"), dict)
+            and dict(row["evidence"]).get("strategy_id")
+        )
+        if len(page) < PAGE_SIZE:
             break
-    return tuple(rows)
+    return tuple(output)
 
 
-def _geometry_by_signal(
-    rest: _ForwardRest,
-    signal_ids: tuple[str, ...],
-) -> dict[str, dict[str, object]]:
-    output: dict[str, dict[str, object]] = {}
-    for signal_id in signal_ids:
-        rows = rest.select_rows(
-            "signal_geometry",
-            {
-                "select": (
-                    "signal_id,entry_mode,entry_price,stop_loss,tp1,tp2,risk_per_unit,"
-                    "rr_tp1,rr_tp2,geometry_created_at_ms,raw"
-                ),
-                "signal_id": f"eq.{signal_id}",
-                "limit": "1",
-            },
-            operation="FORWARD_SIGNAL_GEOMETRY",
-        )
-        if rows:
-            output[signal_id] = rows[0]
-    return output
+def _geometry(rest: ForwardRest, signal_id: str) -> dict[str, object] | None:
+    rows = rest.select(
+        "signal_geometry",
+        {
+            "select": "signal_id,entry_mode,entry_price,stop_loss,tp1,tp2,rr_tp2,geometry_created_at_ms",
+            "signal_id": f"eq.{signal_id}",
+            "limit": "1",
+        },
+        operation="STRATEGY_FORWARD_GEOMETRY",
+    )
+    return rows[0] if rows else None
 
 
-def _evaluation_rows(
-    signals: tuple[dict[str, object], ...],
-    geometry: dict[str, dict[str, object]],
-) -> tuple[dict[str, object], ...]:
-    rows: list[dict[str, object]] = []
-    for signal in signals:
+def sync_signal_evaluations(rest: ForwardRest, *, now_ms: int) -> tuple[int, int]:
+    source = _recent_signals(rest, now_ms)
+    evaluations: list[dict[str, object]] = []
+    papers: list[dict[str, object]] = []
+    for signal in source:
         signal_id = str(signal.get("signal_id") or "")
-        geo = geometry.get(signal_id)
-        evidence = signal.get("evidence")
-        if not signal_id or geo is None or not isinstance(evidence, dict):
+        evidence_raw = signal.get("evidence")
+        if not signal_id or not isinstance(evidence_raw, dict):
             continue
+        evidence = dict(evidence_raw)
         strategy_id = str(evidence.get("strategy_id") or "").strip()
-        if not strategy_id:
+        geo = _geometry(rest, signal_id)
+        if not strategy_id or geo is None:
             continue
-        entry = _decimal(geo.get("entry_price"))
-        stop = _decimal(geo.get("stop_loss"))
-        tp2 = _decimal(geo.get("tp2"))
-        rr2 = _decimal(geo.get("rr_tp2"))
-        if entry is None or stop is None or tp2 is None or rr2 is None:
+        entry = _dec(geo.get("entry_price"))
+        stop = _dec(geo.get("stop_loss"))
+        tp2 = _dec(geo.get("tp2"))
+        rr2 = _dec(geo.get("rr_tp2"))
+        if None in (entry, stop, tp2, rr2):
             continue
-        promotion_stage = str(evidence.get("promotion_stage") or "UNSPECIFIED")
-        evaluation_id = _stable_id("eval", signal_id, strategy_id)
-        rows.append(
+        assert entry is not None and stop is not None and tp2 is not None and rr2 is not None
+        stage = str(evidence.get("promotion_stage") or "UNSPECIFIED")
+        evaluation_id = _id("eval", signal_id, strategy_id)
+        common = {
+            "strategy_id": strategy_id,
+            "promotion_stage": stage,
+            "symbol": str(signal["symbol"]).upper(),
+            "direction": str(signal["direction"]).upper(),
+            "strategy_timeframe": _strategy_tf(strategy_id, evidence),
+            "execution_timeframe": EXECUTION_INTERVAL,
+            "regime": str(signal.get("regime") or "UNKNOWN"),
+        }
+        evaluations.append(
             {
                 "evaluation_id": evaluation_id,
                 "source_signal_id": signal_id,
-                "strategy_id": strategy_id,
-                "promotion_stage": promotion_stage,
-                "symbol": str(signal["symbol"]).upper(),
-                "direction": str(signal["direction"]).upper(),
-                "strategy_timeframe": _strategy_timeframe(strategy_id, evidence),
-                "execution_timeframe": EXECUTION_INTERVAL,
+                **common,
                 "setup": str(signal.get("setup") or "UNKNOWN"),
-                "regime": str(signal.get("regime") or "UNKNOWN"),
                 "signal_created_at_ms": int(signal["created_at_ms"]),
                 "score": signal.get("score"),
                 "planned_entry_price": entry,
                 "planned_stop_loss": stop,
-                "planned_tp1": _decimal(geo.get("tp1")),
+                "planned_tp1": _dec(geo.get("tp1")),
                 "planned_tp2": tp2,
                 "planned_rr_tp2": rr2,
                 "metadata": {
@@ -239,125 +243,96 @@ def _evaluation_rows(
                     "source_signal_status": signal.get("status"),
                     "entry_mode": geo.get("entry_mode"),
                     "geometry_created_at_ms": geo.get("geometry_created_at_ms"),
+                    "entry_policy": "NEXT_5M_OPEN",
+                    "intrabar_conflict_policy": "SL_FIRST",
                     "execution_influence": False,
                     "promotion_authority": False,
-                    "paper_entry_policy": "NEXT_5M_OPEN",
-                    "intrabar_conflict_policy": "SL_FIRST",
-                    "round_trip_cost_bps": str(BASELINE_ROUND_TRIP_COST_BPS),
                 },
             }
         )
-    return tuple(rows)
-
-
-def _paper_seed_rows(evaluations: tuple[dict[str, object], ...]) -> tuple[dict[str, object], ...]:
-    return tuple(
-        {
-            "paper_trade_id": _stable_id("paper", row["evaluation_id"]),
-            "evaluation_id": row["evaluation_id"],
-            "strategy_id": row["strategy_id"],
-            "promotion_stage": row["promotion_stage"],
-            "symbol": row["symbol"],
-            "direction": row["direction"],
-            "strategy_timeframe": row["strategy_timeframe"],
-            "execution_timeframe": EXECUTION_INTERVAL,
-            "regime": row["regime"],
-            "decision_time_ms": row["signal_created_at_ms"],
-            "status": "PENDING",
-            "stop_loss": row["planned_stop_loss"],
-            "tp1": row.get("planned_tp1"),
-            "tp2": row["planned_tp2"],
-            "round_trip_cost_bps": BASELINE_ROUND_TRIP_COST_BPS,
-            "metadata": {
-                "schema_version": FORWARD_SCHEMA_VERSION,
-                "source_signal_id": row["source_signal_id"],
-                "planned_entry_price": str(row["planned_entry_price"]),
-                "planned_rr_tp2": str(row["planned_rr_tp2"]),
-                "execution_influence": False,
-                "promotion_authority": False,
-            },
-        }
-        for row in evaluations
-    )
-
-
-def sync_signal_evaluations(
-    rest: _ForwardRest,
-    *,
-    now_ms: int,
-) -> tuple[int, int]:
-    signals = _fetch_recent_strategy_signals(rest, now_ms=now_ms)
-    geometry = _geometry_by_signal(
-        rest,
-        tuple(str(row["signal_id"]) for row in signals if row.get("signal_id")),
-    )
-    evaluations = _evaluation_rows(signals, geometry)
-    if evaluations:
-        rest.upsert(
-            "strategy_forward_evaluations",
-            evaluations,
-            on_conflict=("evaluation_id",),
+        papers.append(
+            {
+                "paper_trade_id": _id("paper", evaluation_id),
+                "evaluation_id": evaluation_id,
+                **common,
+                "decision_time_ms": int(signal["created_at_ms"]),
+                "status": "PENDING",
+                "stop_loss": stop,
+                "tp1": _dec(geo.get("tp1")),
+                "tp2": tp2,
+                "round_trip_cost_bps": BASELINE_ROUND_TRIP_COST_BPS,
+                "metadata": {
+                    "schema_version": FORWARD_SCHEMA_VERSION,
+                    "source_signal_id": signal_id,
+                    "planned_entry_price": str(entry),
+                    "planned_rr_tp2": str(rr2),
+                    "execution_influence": False,
+                    "promotion_authority": False,
+                },
+            }
         )
-        rest.upsert(
-            "strategy_paper_trades",
-            _paper_seed_rows(evaluations),
-            on_conflict=("paper_trade_id",),
-        )
-    return len(evaluations), len(signals)
+    # Immutable seeds: never merge an old seed over OPEN/CLOSED lifecycle state.
+    rest.insert_ignore(
+        "strategy_forward_evaluations",
+        tuple(evaluations),
+        on_conflict="evaluation_id",
+    )
+    rest.insert_ignore(
+        "strategy_paper_trades",
+        tuple(papers),
+        on_conflict="paper_trade_id",
+    )
+    return len(evaluations), len(source)
 
 
-def _open_papers(rest: _ForwardRest) -> tuple[dict[str, object], ...]:
-    return rest.select_rows(
+def _pending_and_open(rest: ForwardRest) -> tuple[dict[str, object], ...]:
+    return rest.select(
         "strategy_paper_trades",
         {
             "select": (
-                "paper_trade_id,evaluation_id,strategy_id,promotion_stage,symbol,direction,"
-                "strategy_timeframe,execution_timeframe,regime,decision_time_ms,status,"
-                "entry_time_ms,entry_price,stop_loss,tp1,tp2,initial_risk,exit_time_ms,"
-                "exit_price,exit_reason,gross_result_r,net_result_r,round_trip_cost_bps,"
-                "mfe_r,mae_r,tp1_touched,last_observed_ms,metadata"
+                "paper_trade_id,strategy_id,promotion_stage,symbol,direction,"
+                "strategy_timeframe,regime,decision_time_ms,status,entry_time_ms,entry_price,"
+                "stop_loss,tp1,tp2,initial_risk,round_trip_cost_bps,mfe_r,mae_r,"
+                "tp1_touched,last_observed_ms"
             ),
             "status": "in.(PENDING,OPEN)",
             "order": "decision_time_ms.asc",
             "limit": "1000",
         },
-        operation="FORWARD_OPEN_PAPERS",
+        operation="STRATEGY_FORWARD_OPEN_PAPERS",
     )
 
 
-def _valid_geometry(direction: str, entry: Decimal, stop: Decimal, tp2: Decimal) -> bool:
-    if direction == "LONG":
-        return stop < entry < tp2
-    if direction == "SHORT":
-        return tp2 < entry < stop
-    return False
+def _geometry_valid(direction: str, entry: Decimal, stop: Decimal, tp2: Decimal) -> bool:
+    return (direction == "LONG" and stop < entry < tp2) or (
+        direction == "SHORT" and tp2 < entry < stop
+    )
 
 
-def _activate_pending(
-    rest: _ForwardRest,
+def _activate(
+    rest: ForwardRest,
     market: BinanceDemoPublicRestClient,
     row: dict[str, object],
     *,
     now_ms: int,
 ) -> dict[str, object] | None:
-    decision_time = int(row["decision_time_ms"])
-    if now_ms <= decision_time:
+    decision = int(row["decision_time_ms"])
+    if now_ms <= decision:
         return None
-    candles = market.get_klines_window(
+    bars = market.get_klines_window(
         str(row["symbol"]),
         EXECUTION_INTERVAL,
-        start_time_ms=decision_time,
+        start_time_ms=decision,
         end_time_ms=now_ms + 1,
         max_candles=500,
     )
-    entry_bar = next((item for item in candles if item.start_time_ms > decision_time), None)
+    entry_bar = next((bar for bar in bars if bar.start_time_ms > decision), None)
     if entry_bar is None:
         return None
     entry = entry_bar.open
     stop = Decimal(str(row["stop_loss"]))
     tp2 = Decimal(str(row["tp2"]))
-    direction = str(row["direction"])
-    if not _valid_geometry(direction, entry, stop, tp2):
+    if not _geometry_valid(str(row["direction"]), entry, stop, tp2):
         rest.patch_paper(
             str(row["paper_trade_id"]),
             {
@@ -370,32 +345,21 @@ def _activate_pending(
         )
         return None
     risk = abs(entry - stop)
-    rest.patch_paper(
-        str(row["paper_trade_id"]),
-        {
-            "status": "OPEN",
-            "entry_time_ms": entry_bar.start_time_ms,
-            "entry_price": str(entry),
-            "initial_risk": str(risk),
-            "mfe_r": "0",
-            "mae_r": "0",
-            "last_observed_ms": entry_bar.start_time_ms - EXECUTION_INTERVAL_MS,
-        },
-    )
-    return {
-        **row,
+    patch = {
         "status": "OPEN",
         "entry_time_ms": entry_bar.start_time_ms,
         "entry_price": str(entry),
         "initial_risk": str(risk),
         "mfe_r": "0",
         "mae_r": "0",
-        "last_observed_ms": entry_bar.start_time_ms - EXECUTION_INTERVAL_MS,
+        "last_observed_ms": entry_bar.start_time_ms - BAR_MS,
     }
+    rest.patch_paper(str(row["paper_trade_id"]), patch)
+    return {**row, **patch}
 
 
-def _advance_open(
-    rest: _ForwardRest,
+def _advance(
+    rest: ForwardRest,
     market: BinanceDemoPublicRestClient,
     row: dict[str, object],
     *,
@@ -404,27 +368,23 @@ def _advance_open(
     entry_time = int(row["entry_time_ms"])
     entry = Decimal(str(row["entry_price"]))
     stop = Decimal(str(row["stop_loss"]))
-    tp1 = _decimal(row.get("tp1"))
+    tp1 = _dec(row.get("tp1"))
     tp2 = Decimal(str(row["tp2"]))
     risk = Decimal(str(row["initial_risk"]))
     direction = str(row["direction"])
-    last_observed = int(row.get("last_observed_ms") or (entry_time - EXECUTION_INTERVAL_MS))
-    start = max(entry_time, last_observed + EXECUTION_INTERVAL_MS)
+    last = int(row.get("last_observed_ms") or (entry_time - BAR_MS))
+    start = max(entry_time, last + BAR_MS)
     if start >= now_ms:
         return False
-    candles = market.get_klines_window(
+    bars = market.get_klines_window(
         str(row["symbol"]),
         EXECUTION_INTERVAL,
         start_time_ms=start,
         end_time_ms=now_ms + 1,
         max_candles=50_000,
     )
-    closed = tuple(
-        candle
-        for candle in candles
-        if candle.start_time_ms + EXECUTION_INTERVAL_MS <= now_ms
-    )
-    if not closed:
+    bars = tuple(bar for bar in bars if bar.start_time_ms + BAR_MS <= now_ms)
+    if not bars:
         return False
 
     mfe = Decimal(str(row.get("mfe_r") or 0))
@@ -432,48 +392,42 @@ def _advance_open(
     tp1_touched = bool(row.get("tp1_touched", False))
     exit_reason: str | None = None
     exit_price: Decimal | None = None
+    gross_r: Decimal | None = None
     exit_time: int | None = None
-    gross_result: Decimal | None = None
+    last_processed = bars[-1].start_time_ms
 
-    for candle in closed:
+    for bar in bars:
         if direction == "LONG":
-            mfe = max(mfe, max(Decimal(0), candle.high - entry) / risk)
-            mae = max(mae, max(Decimal(0), entry - candle.low) / risk)
-            if tp1 is not None and candle.high >= tp1:
-                tp1_touched = True
-            stop_hit = candle.low <= stop
-            target_hit = candle.high >= tp2
-            if stop_hit:
-                exit_reason, exit_price, gross_result = "STOP_LOSS", stop, Decimal("-1")
+            mfe = max(mfe, max(Decimal(0), bar.high - entry) / risk)
+            mae = max(mae, max(Decimal(0), entry - bar.low) / risk)
+            tp1_touched = tp1_touched or (tp1 is not None and bar.high >= tp1)
+            stop_hit, target_hit = bar.low <= stop, bar.high >= tp2
+            if stop_hit:  # conservative same-bar ambiguity policy
+                exit_reason, exit_price, gross_r = "STOP_LOSS", stop, Decimal("-1")
             elif target_hit:
-                exit_reason = "TAKE_PROFIT_2"
-                exit_price = tp2
-                gross_result = (tp2 - entry) / risk
+                exit_reason, exit_price, gross_r = "TAKE_PROFIT_2", tp2, (tp2 - entry) / risk
         else:
-            mfe = max(mfe, max(Decimal(0), entry - candle.low) / risk)
-            mae = max(mae, max(Decimal(0), candle.high - entry) / risk)
-            if tp1 is not None and candle.low <= tp1:
-                tp1_touched = True
-            stop_hit = candle.high >= stop
-            target_hit = candle.low <= tp2
+            mfe = max(mfe, max(Decimal(0), entry - bar.low) / risk)
+            mae = max(mae, max(Decimal(0), bar.high - entry) / risk)
+            tp1_touched = tp1_touched or (tp1 is not None and bar.low <= tp1)
+            stop_hit, target_hit = bar.high >= stop, bar.low <= tp2
             if stop_hit:
-                exit_reason, exit_price, gross_result = "STOP_LOSS", stop, Decimal("-1")
+                exit_reason, exit_price, gross_r = "STOP_LOSS", stop, Decimal("-1")
             elif target_hit:
-                exit_reason = "TAKE_PROFIT_2"
-                exit_price = tp2
-                gross_result = (entry - tp2) / risk
+                exit_reason, exit_price, gross_r = "TAKE_PROFIT_2", tp2, (entry - tp2) / risk
         if exit_reason is not None:
-            exit_time = candle.start_time_ms
+            exit_time = bar.start_time_ms
+            last_processed = bar.start_time_ms
             break
 
     patch: dict[str, object] = {
         "mfe_r": str(mfe),
         "mae_r": str(mae),
         "tp1_touched": tp1_touched,
-        "last_observed_ms": closed[-1].start_time_ms,
+        "last_observed_ms": last_processed,
     }
     if exit_reason is not None:
-        assert exit_price is not None and exit_time is not None and gross_result is not None
+        assert exit_price is not None and gross_r is not None and exit_time is not None
         cost_bps = Decimal(str(row.get("round_trip_cost_bps") or BASELINE_ROUND_TRIP_COST_BPS))
         cost_r = entry * cost_bps / Decimal("10000") / risk
         patch.update(
@@ -482,8 +436,8 @@ def _advance_open(
                 "exit_time_ms": exit_time,
                 "exit_price": str(exit_price),
                 "exit_reason": exit_reason,
-                "gross_result_r": str(gross_result),
-                "net_result_r": str(gross_result - cost_r),
+                "gross_result_r": str(gross_r),
+                "net_result_r": str(gross_r - cost_r),
             }
         )
     rest.patch_paper(str(row["paper_trade_id"]), patch)
@@ -491,26 +445,24 @@ def _advance_open(
 
 
 def advance_paper_lifecycle(
-    rest: _ForwardRest,
+    rest: ForwardRest,
     market: BinanceDemoPublicRestClient,
     *,
     now_ms: int,
 ) -> tuple[int, int, int]:
-    opened = 0
-    closed = 0
-    failures = 0
-    for original in _open_papers(rest):
+    opened = closed = failures = 0
+    for original in _pending_and_open(rest):
         try:
             row = original
             if str(row["status"]) == "PENDING":
-                activated = _activate_pending(rest, market, row, now_ms=now_ms)
+                activated = _activate(rest, market, row, now_ms=now_ms)
                 if activated is None:
                     continue
                 row = activated
                 opened += 1
-            if str(row["status"]) == "OPEN" and _advance_open(rest, market, row, now_ms=now_ms):
+            if str(row["status"]) == "OPEN" and _advance(rest, market, row, now_ms=now_ms):
                 closed += 1
-        except Exception as exc:  # isolate one symbol/paper from the 24/7 observer
+        except Exception as exc:  # isolate a single market/paper failure
             failures += 1
             print(
                 json.dumps(
@@ -526,94 +478,88 @@ def advance_paper_lifecycle(
     return opened, closed, failures
 
 
-def _all_closed_papers(rest: _ForwardRest) -> tuple[dict[str, object], ...]:
+def _closed_papers(rest: ForwardRest) -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
-    for page in range(20):
-        batch = rest.select_rows(
+    for offset in range(0, 10_000, PAGE_SIZE):
+        page = rest.select(
             "strategy_paper_trades",
             {
                 "select": (
-                    "paper_trade_id,strategy_id,promotion_stage,symbol,direction,"
-                    "strategy_timeframe,regime,entry_time_ms,exit_time_ms,net_result_r,"
-                    "mfe_r,mae_r,tp1_touched"
+                    "strategy_id,promotion_stage,symbol,direction,strategy_timeframe,regime,"
+                    "entry_time_ms,exit_time_ms,net_result_r,mfe_r,mae_r,tp1_touched"
                 ),
                 "status": "eq.CLOSED",
                 "order": "exit_time_ms.asc",
                 "limit": str(PAGE_SIZE),
-                "offset": str(page * PAGE_SIZE),
+                "offset": str(offset),
             },
-            operation="FORWARD_CLOSED_PAPERS",
+            operation="STRATEGY_FORWARD_CLOSED_PAPERS",
         )
-        rows.extend(batch)
-        if len(batch) < PAGE_SIZE:
+        rows.extend(page)
+        if len(page) < PAGE_SIZE:
             break
     return tuple(rows)
 
 
 def calculate_forward_metrics(rows: tuple[dict[str, object], ...]) -> ForwardMetrics:
     if not rows:
-        return ForwardMetrics(0, 0, 0, Decimal(0), Decimal(0), None, Decimal(0), Decimal(0), Decimal(0), Decimal(0), 0)
+        return ForwardMetrics(
+            0, 0, 0, Decimal(0), Decimal(0), None, Decimal(0), Decimal(0), Decimal(0), Decimal(0), 0
+        )
     ordered = sorted(rows, key=lambda row: int(row["exit_time_ms"]))
     results = tuple(Decimal(str(row["net_result_r"])) for row in ordered)
-    wins = sum(result > 0 for result in results)
-    losses = sum(result < 0 for result in results)
+    count = Decimal(len(results))
+    wins = sum(value > 0 for value in results)
+    losses = sum(value < 0 for value in results)
     gross_profit = sum((value for value in results if value > 0), Decimal(0))
     gross_loss = abs(sum((value for value in results if value < 0), Decimal(0)))
-    equity = Decimal(0)
-    peak = Decimal(0)
-    max_drawdown = Decimal(0)
+    equity = peak = drawdown = Decimal(0)
     for value in results:
         equity += value
         peak = max(peak, equity)
-        max_drawdown = max(max_drawdown, peak - equity)
-    count = Decimal(len(rows))
-    holding_values = tuple(
-        int(row["exit_time_ms"]) - int(row["entry_time_ms"])
-        for row in ordered
-        if row.get("entry_time_ms") is not None
-    )
+        drawdown = max(drawdown, peak - equity)
+    holds = tuple(int(row["exit_time_ms"]) - int(row["entry_time_ms"]) for row in ordered)
     return ForwardMetrics(
-        sample_size=len(rows),
+        sample_size=len(results),
         wins=wins,
         losses=losses,
         win_rate=Decimal(wins) / count,
         expectancy_r=sum(results, Decimal(0)) / count,
         profit_factor=gross_profit / gross_loss if gross_loss > 0 else None,
-        max_drawdown_r=max_drawdown,
+        max_drawdown_r=drawdown,
         average_mfe_r=sum((Decimal(str(row.get("mfe_r") or 0)) for row in rows), Decimal(0)) / count,
         average_mae_r=sum((Decimal(str(row.get("mae_r") or 0)) for row in rows), Decimal(0)) / count,
         tp1_touch_rate=Decimal(sum(bool(row.get("tp1_touched")) for row in rows)) / count,
-        average_holding_ms=(sum(holding_values) // len(holding_values)) if holding_values else 0,
+        average_holding_ms=sum(holds) // len(holds),
     )
 
 
-def _slice_summary(rows: tuple[dict[str, object], ...], keys: tuple[str, ...]) -> dict[str, object]:
+def _slice(rows: tuple[dict[str, object], ...], keys: tuple[str, ...]) -> dict[str, object]:
     grouped: dict[tuple[str, ...], list[dict[str, object]]] = {}
     for row in rows:
-        key = tuple(str(row.get(name) or "UNKNOWN") for name in keys)
-        grouped.setdefault(key, []).append(row)
+        grouped.setdefault(tuple(str(row.get(key) or "UNKNOWN") for key in keys), []).append(row)
     return {
         "|".join(key): calculate_forward_metrics(tuple(group)).to_dict()
         for key, group in sorted(grouped.items())
     }
 
 
-def build_forward_summary(rows: tuple[dict[str, object], ...], *, generated_at_ms: int) -> dict[str, object]:
+def build_forward_summary(rows: tuple[dict[str, object], ...], now_ms: int) -> dict[str, object]:
     return {
         "schema_version": FORWARD_SCHEMA_VERSION,
-        "generated_at_ms": generated_at_ms,
+        "generated_at_ms": now_ms,
         "closed_paper_trades": len(rows),
-        "execution_influence": False,
-        "promotion_authority": False,
         "entry_policy": "NEXT_5M_OPEN",
         "intrabar_conflict_policy": "SL_FIRST",
         "round_trip_cost_bps": str(BASELINE_ROUND_TRIP_COST_BPS),
-        "by_strategy": _slice_summary(rows, ("strategy_id",)),
-        "by_strategy_symbol": _slice_summary(rows, ("strategy_id", "symbol")),
-        "by_strategy_timeframe": _slice_summary(rows, ("strategy_id", "strategy_timeframe")),
-        "by_strategy_regime": _slice_summary(rows, ("strategy_id", "regime")),
-        "by_strategy_direction": _slice_summary(rows, ("strategy_id", "direction")),
-        "by_full_slice": _slice_summary(
+        "execution_influence": False,
+        "promotion_authority": False,
+        "by_strategy": _slice(rows, ("strategy_id",)),
+        "by_strategy_symbol": _slice(rows, ("strategy_id", "symbol")),
+        "by_strategy_timeframe": _slice(rows, ("strategy_id", "strategy_timeframe")),
+        "by_strategy_regime": _slice(rows, ("strategy_id", "regime")),
+        "by_strategy_direction": _slice(rows, ("strategy_id", "direction")),
+        "by_full_slice": _slice(
             rows,
             ("strategy_id", "symbol", "strategy_timeframe", "regime", "direction"),
         ),
@@ -628,19 +574,25 @@ def paper_forward_results(
 ) -> tuple[tuple[Decimal, ...], dict[str, object]]:
     if not config.enabled:
         return (), {"paper_forward_available": False}
-    with _ForwardRest(config) as rest:
-        rows = rest.select_rows(
-            "strategy_paper_trades",
-            {
-                "select": "exit_time_ms,net_result_r",
-                "strategy_id": f"eq.{strategy_id}",
-                "promotion_stage": f"eq.{promotion_stage}",
-                "status": "eq.CLOSED",
-                "order": "exit_time_ms.asc",
-                "limit": "1000",
-            },
-            operation="PAPER_FORWARD_PROMOTION_EVIDENCE",
-        )
+    with ForwardRest(config) as rest:
+        rows: list[dict[str, object]] = []
+        for offset in range(0, 10_000, PAGE_SIZE):
+            page = rest.select(
+                "strategy_paper_trades",
+                {
+                    "select": "exit_time_ms,net_result_r",
+                    "strategy_id": f"eq.{strategy_id}",
+                    "promotion_stage": f"eq.{promotion_stage}",
+                    "status": "eq.CLOSED",
+                    "order": "exit_time_ms.asc",
+                    "limit": str(PAGE_SIZE),
+                    "offset": str(offset),
+                },
+                operation="PAPER_FORWARD_PROMOTION_EVIDENCE",
+            )
+            rows.extend(page)
+            if len(page) < PAGE_SIZE:
+                break
     results = tuple(Decimal(str(row["net_result_r"])) for row in rows)
     duration = (
         int(rows[-1]["exit_time_ms"]) - int(rows[0]["exit_time_ms"])
@@ -662,29 +614,17 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
     if not config.enabled:
         raise PersistenceError("strategy forward evidence requires dedicated Crypto Scanner Supabase")
     runtime = load_runtime_config()
-
     with (
-        _ForwardRest(config) as rest,
+        ForwardRest(config) as rest,
         BinanceDemoPublicRestClient(base_url=runtime.binance_rest_url) as market,
     ):
         evaluations, source_signals = sync_signal_evaluations(rest, now_ms=timestamp)
-        opened, closed_now, paper_failures = advance_paper_lifecycle(
-            rest,
-            market,
-            now_ms=timestamp,
-        )
-        closed_rows = _all_closed_papers(rest)
-        summary = build_forward_summary(closed_rows, generated_at_ms=timestamp)
+        opened, closed_now, failures = advance_paper_lifecycle(rest, market, now_ms=timestamp)
+        closed_rows = _closed_papers(rest)
+        summary = build_forward_summary(closed_rows, timestamp)
         rest.upsert(
             "runtime_state",
-            (
-                {
-                    "state_key": FORWARD_STATE_KEY,
-                    "version": 1,
-                    "state": summary,
-                    "updated_at_ms": timestamp,
-                },
-            ),
+            ({"state_key": FORWARD_STATE_KEY, "version": 1, "state": summary, "updated_at_ms": timestamp},),
             on_conflict=("state_key",),
         )
         rest.upsert(
@@ -693,7 +633,7 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
                 {
                     "component": WORKER_COMPONENT,
                     "observed_at_ms": timestamp,
-                    "status": "SUCCESS" if paper_failures == 0 else "DEGRADED",
+                    "status": "SUCCESS" if failures == 0 else "DEGRADED",
                     "git_sha": os.getenv("GITHUB_SHA", "LOCAL"),
                     "details": {
                         "schema_version": FORWARD_SCHEMA_VERSION,
@@ -701,7 +641,7 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
                         "evaluations_synced": evaluations,
                         "paper_opened": opened,
                         "paper_closed_now": closed_now,
-                        "paper_failures": paper_failures,
+                        "paper_failures": failures,
                         "closed_sample_total": len(closed_rows),
                         "execution_influence": False,
                         "promotion_authority": False,
@@ -711,14 +651,13 @@ def run_forward_evidence_cycle(*, now_ms: int | None = None) -> dict[str, object
             ),
             on_conflict=("component",),
         )
-
     return {
-        "status": "PASS_STRATEGY_FORWARD_EVIDENCE" if paper_failures == 0 else "DEGRADED_STRATEGY_FORWARD_EVIDENCE",
+        "status": "PASS_STRATEGY_FORWARD_EVIDENCE" if failures == 0 else "DEGRADED_STRATEGY_FORWARD_EVIDENCE",
         "source_strategy_signals": source_signals,
         "evaluations_synced": evaluations,
         "paper_opened": opened,
         "paper_closed_now": closed_now,
-        "paper_failures": paper_failures,
+        "paper_failures": failures,
         "closed_sample_total": len(closed_rows),
         "execution_influence": False,
         "promotion_authority": False,
