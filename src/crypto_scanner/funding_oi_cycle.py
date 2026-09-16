@@ -87,6 +87,13 @@ def _leg_label(leg: FundingOiLeg) -> str:
     )
 
 
+def _scope_discovery_to_active_symbols(results, active_symbols: frozenset[str]):
+    """Prevent unrelated global candidates from starving active Funding/OI legs."""
+    if not active_symbols:
+        return ()
+    return tuple(result for result in results if result.symbol.upper() in active_symbols)
+
+
 def _collect_oi_values(
     public: BinanceDemoPublicRestClient,
     universe: tuple[str, ...],
@@ -183,7 +190,9 @@ def run_funding_oi_cycle() -> FundingOiCycleResult:
 
         discovery = DiscoveryPipeline(public, universe=runtime.universe).run(discovery_micro)
         run_id = linkage.save_discovery_run(discovery, execution_armed=True)
-        hot = select_hot_candidates(discovery.results)
+        active_symbols = frozenset(leg.symbol.upper() for leg in decision.legs)
+        strategy_results = _scope_discovery_to_active_symbols(discovery.results, active_symbols)
+        hot = select_hot_candidates(strategy_results)
         eligible = filter_funding_oi_candidates(hot, decision)
         eligible_symbols = tuple(candidate.symbol for candidate in eligible)
 

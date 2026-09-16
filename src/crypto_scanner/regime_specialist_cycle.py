@@ -30,6 +30,8 @@ from crypto_scanner.lifecycle import recover_authoritative_state
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.regime_specialist_demo import (
     REGIME_SPECIALIST_STRATEGY_ID,
+    GlobalRegime,
+    RegimeSpecialistDecision,
     build_regime_specialist_decision,
     filter_regime_specialist_candidates,
 )
@@ -68,6 +70,21 @@ class RegimeSpecialistCycleResult:
 
 def _now_ms() -> int:
     return time.time_ns() // 1_000_000
+
+
+def _active_strategy_symbols(decision: RegimeSpecialistDecision) -> frozenset[str]:
+    if decision.regime is GlobalRegime.BULL and decision.bull_switch_active:
+        return frozenset({"BTCUSDT"})
+    if decision.regime is GlobalRegime.BEAR:
+        return frozenset(symbol.upper() for symbol in decision.bear_short_symbols)
+    return frozenset()
+
+
+def _scope_discovery_to_active_symbols(results, active_symbols: frozenset[str]):
+    """Prevent unrelated global candidates from starving the active regime sleeve."""
+    if not active_symbols:
+        return ()
+    return tuple(result for result in results if result.symbol.upper() in active_symbols)
 
 
 def run_regime_specialist_cycle() -> RegimeSpecialistCycleResult:
@@ -136,7 +153,9 @@ def run_regime_specialist_cycle() -> RegimeSpecialistCycleResult:
 
         discovery = DiscoveryPipeline(public, universe=runtime.universe).run(discovery_micro)
         run_id = linkage.save_discovery_run(discovery, execution_armed=True)
-        hot = select_hot_candidates(discovery.results)
+        active_symbols = _active_strategy_symbols(decision)
+        strategy_results = _scope_discovery_to_active_symbols(discovery.results, active_symbols)
+        hot = select_hot_candidates(strategy_results)
         eligible = filter_regime_specialist_candidates(hot, decision)
         eligible_symbols = tuple(candidate.symbol for candidate in eligible)
 
