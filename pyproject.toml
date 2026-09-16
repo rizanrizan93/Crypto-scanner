@@ -41,6 +41,7 @@ crypto-scanner-heartbeat = "crypto_scanner.runtime_health:main"
 crypto-scanner-runtime-watchdog = "crypto_scanner.runtime_watchdog:main"
 crypto-scanner-historical-research = "crypto_scanner.run_historical_research:main"
 crypto-scanner-strategy-promote = "crypto_scanner.strategy_promotion_runtime:main"
+crypto-scanner-strategy-forward-evidence = "crypto_scanner.strategy_forward_evidence:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_scanner"]
@@ -52,7 +53,7 @@ addopts = "-q"
 
 [tool.ruff]
 target-version = "py312"
-line-length = 100
+line-length = 102
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
