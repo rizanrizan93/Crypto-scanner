@@ -71,6 +71,47 @@ def _funding_for_window(
     )
 
 
+def _closed_episode(
+    *,
+    income: tuple[IncomeRecord, ...],
+    symbol: str,
+    direction: TradeDirection | None,
+    entry_time_ms: int,
+    exit_time_ms: int,
+    opening_qty: Decimal,
+    opening_notional: Decimal,
+    closing_qty: Decimal,
+    closing_notional: Decimal,
+    realized_pnl: Decimal,
+    commission: Decimal,
+    trade_ids: list[str],
+    entry_order_ids: list[str],
+) -> ClosedTradeEvidence:
+    if direction is None:
+        raise ClosedTradeError(f"flat {symbol} episode has no direction")
+    if opening_qty <= 0 or closing_qty <= 0 or opening_qty != closing_qty:
+        raise ClosedTradeError(
+            f"flat {symbol} episode has inconsistent opening/closing quantity"
+        )
+    funding_fee = _funding_for_window(income, symbol, entry_time_ms, exit_time_ms)
+    return ClosedTradeEvidence(
+        symbol=symbol,
+        direction=direction,
+        entry_time_ms=entry_time_ms,
+        exit_time_ms=exit_time_ms,
+        entry_qty=opening_qty,
+        exit_qty=closing_qty,
+        average_entry_price=opening_notional / opening_qty,
+        average_exit_price=closing_notional / closing_qty,
+        realized_pnl=realized_pnl,
+        commission=commission,
+        funding_fee=funding_fee,
+        net_pnl=realized_pnl + funding_fee - commission,
+        trade_ids=tuple(trade_ids),
+        entry_order_ids=tuple(entry_order_ids),
+    )
+
+
 def reconstruct_closed_trades(
     fills: tuple[UserTradeFill, ...],
     income: tuple[IncomeRecord, ...] = (),
@@ -109,40 +150,6 @@ def reconstruct_closed_trades(
         entry_order_ids: list[str] = []
         seen_entry_order_ids: set[str] = set()
 
-        def finalize_episode(exit_time_ms: int) -> None:
-            nonlocal direction
-            if direction is None:
-                raise ClosedTradeError(f"flat {symbol} episode has no direction")
-            if opening_qty <= 0 or closing_qty <= 0 or opening_qty != closing_qty:
-                raise ClosedTradeError(
-                    f"flat {symbol} episode has inconsistent opening/closing quantity"
-                )
-            funding_fee = _funding_for_window(
-                income,
-                symbol,
-                entry_time_ms,
-                exit_time_ms,
-            )
-            results.append(
-                ClosedTradeEvidence(
-                    symbol=symbol,
-                    direction=direction,
-                    entry_time_ms=entry_time_ms,
-                    exit_time_ms=exit_time_ms,
-                    entry_qty=opening_qty,
-                    exit_qty=closing_qty,
-                    average_entry_price=opening_notional / opening_qty,
-                    average_exit_price=closing_notional / closing_qty,
-                    realized_pnl=realized_pnl,
-                    commission=commission,
-                    funding_fee=funding_fee,
-                    net_pnl=realized_pnl + funding_fee - commission,
-                    trade_ids=tuple(trade_ids),
-                    entry_order_ids=tuple(entry_order_ids),
-                )
-            )
-            direction = None
-
         for fill in sorted(symbol_fills, key=lambda item: (item.time_ms, item.trade_id)):
             signed = _signed_qty(fill)
             before = position
@@ -177,7 +184,6 @@ def reconstruct_closed_trades(
                 position = after
                 continue
 
-            # Opposite-side fill: close as much of the current episode as possible.
             close_qty = min(fill.qty, abs(before))
             residual_qty = fill.qty - close_qty
             if close_qty <= 0:
@@ -194,16 +200,47 @@ def reconstruct_closed_trades(
             if residual_qty == 0:
                 position = after
                 if position == 0:
-                    finalize_episode(fill.time_ms)
+                    results.append(
+                        _closed_episode(
+                            income=income,
+                            symbol=symbol,
+                            direction=direction,
+                            entry_time_ms=entry_time_ms,
+                            exit_time_ms=fill.time_ms,
+                            opening_qty=opening_qty,
+                            opening_notional=opening_notional,
+                            closing_qty=closing_qty,
+                            closing_notional=closing_notional,
+                            realized_pnl=realized_pnl,
+                            commission=commission,
+                            trade_ids=trade_ids,
+                            entry_order_ids=entry_order_ids,
+                        )
+                    )
+                    direction = None
                 continue
 
-            # Atomic reversal. The old position must be fully consumed and the
-            # residual quantity must exactly equal the new opposite exposure.
             if close_qty != abs(before) or residual_qty != abs(after):
                 raise ClosedTradeError(
                     f"reversal quantity for {symbol} is internally inconsistent"
                 )
-            finalize_episode(fill.time_ms)
+            results.append(
+                _closed_episode(
+                    income=income,
+                    symbol=symbol,
+                    direction=direction,
+                    entry_time_ms=entry_time_ms,
+                    exit_time_ms=fill.time_ms,
+                    opening_qty=opening_qty,
+                    opening_notional=opening_notional,
+                    closing_qty=closing_qty,
+                    closing_notional=closing_notional,
+                    realized_pnl=realized_pnl,
+                    commission=commission,
+                    trade_ids=trade_ids,
+                    entry_order_ids=entry_order_ids,
+                )
+            )
 
             direction = TradeDirection.LONG if signed > 0 else TradeDirection.SHORT
             entry_time_ms = fill.time_ms
