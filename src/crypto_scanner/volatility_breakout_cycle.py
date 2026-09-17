@@ -18,7 +18,6 @@ from crypto_scanner.binance.private_write import (
 )
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
-from crypto_scanner.discovery import DiscoveryResult
 from crypto_scanner.discovery_pipeline import DiscoveryPipeline, MicrostructureSnapshot
 from crypto_scanner.durable_execution import DurableExecutionCoordinator, DurableExecutionError
 from crypto_scanner.execution_plan import (
@@ -27,9 +26,12 @@ from crypto_scanner.execution_plan import (
     build_entry_order_plan,
 )
 from crypto_scanner.fast_lane import (
+    DEMO_TEMPORAL_CONFIRMATION_INTERVAL_SECONDS,
+    DEMO_TEMPORAL_CONFIRMATION_ROUNDS,
     FastLaneEvidence,
     ReadinessDecision,
     evaluate_execution_readiness,
+    should_retry_demo_temporal_confirmation,
 )
 from crypto_scanner.hot_watch import DEMO_ACQUISITION_REASON, select_hot_candidates
 from crypto_scanner.lifecycle import recover_authoritative_state
@@ -51,11 +53,6 @@ from crypto_scanner.volatility_breakout_demo import (
 )
 
 PARALLEL_FORWARD_DEMO_STAGE = "FORWARD_DEMO_PARALLEL"
-VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS = 3
-VOL_BREAKOUT_MICRO_CONFIRMATION_INTERVAL_SECONDS = 15.0
-_TEMPORAL_RETRY_REASONS = frozenset(
-    {"ORDERBOOK_NOT_ALIGNED", "TAKER_PRESSURE_NOT_ALIGNED"}
-)
 
 
 class VolatilityBreakoutCycleError(RuntimeError):
@@ -88,28 +85,6 @@ def _now_ms() -> int:
 
 def _leg_label(leg: VolatilityBreakoutLeg) -> str:
     return f"{leg.symbol}:{leg.direction.value}:{leg.target_weight}"
-
-
-def _should_retry_temporal_microstructure(
-    candidate: DiscoveryResult,
-    decision: ReadinessDecision,
-    *,
-    round_index: int,
-) -> bool:
-    """Retry only the bounded Demo temporal-confirmation path.
-
-    The temporal 2-of-3 microstructure gate stores its short history in-process.
-    A strategy-pool cycle is a fresh Python process, so evaluating only once per
-    five-minute acquisition cycle can never satisfy that gate for promoted WATCH
-    candidates. Keep all hard guards unchanged and take up to three fresh snapshots
-    in the same process only when rejection is exclusively micro-alignment related.
-    """
-    return (
-        DEMO_ACQUISITION_REASON in candidate.reasons
-        and round_index < VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS
-        and bool(decision.reasons)
-        and set(decision.reasons).issubset(_TEMPORAL_RETRY_REASONS)
-    )
 
 
 def _scope_discovery_to_active_symbols(results, active_symbols: frozenset[str]):
@@ -243,9 +218,9 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
                 readiness: ReadinessDecision | None = None
                 now_ms = _now_ms()
 
-                for micro_round in range(1, VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS + 1):
+                for micro_round in range(1, DEMO_TEMPORAL_CONFIRMATION_ROUNDS + 1):
                     if micro_round > 1:
-                        time.sleep(VOL_BREAKOUT_MICRO_CONFIRMATION_INTERVAL_SECONDS)
+                        time.sleep(DEMO_TEMPORAL_CONFIRMATION_INTERVAL_SECONDS)
                     # Quote and microstructure are fetched together on every bounded
                     # confirmation round so the strict 2-second freshness contract
                     # remains authoritative.
@@ -285,7 +260,7 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
                             "taker_pressure": str(fresh.taker_pressure),
                         }
                     )
-                    if not _should_retry_temporal_microstructure(
+                    if not should_retry_demo_temporal_confirmation(
                         candidate,
                         readiness,
                         round_index=micro_round,
