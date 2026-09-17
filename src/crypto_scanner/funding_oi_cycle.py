@@ -74,6 +74,7 @@ class FundingOiCycleResult:
     account_blockers: tuple[str, ...]
     execution_error: str | None
     live_trading_locked: bool
+    readiness_rejections: tuple[dict[str, object], ...] = ()
 
 
 def _now_ms() -> int:
@@ -135,6 +136,7 @@ def run_funding_oi_cycle() -> FundingOiCycleResult:
     execution_error: str | None = None
     eligible_symbols: tuple[str, ...] = ()
     account_blockers: tuple[str, ...] = ()
+    readiness_rejections: list[dict[str, object]] = []
 
     with (
         BinanceDemoPublicRestClient(base_url=runtime.binance_rest_url) as public,
@@ -247,29 +249,55 @@ def run_funding_oi_cycle() -> FundingOiCycleResult:
                 instrument = public.get_instrument(candidate.symbol)
                 candles_3m = public.get_klines(candidate.symbol, "3", limit=200)
                 candles_5m = public.get_klines(candidate.symbol, "5", limit=200)
-                ticker = public.get_ticker(candidate.symbol)
-                quote_timestamp_ms = _now_ms()
-                fresh = micro.get_evidence(candidate.symbol)
+                readiness: ReadinessDecision | None = None
                 geometry_now_ms = _now_ms()
-                readiness = evaluate_execution_readiness(
-                    candidate,
-                    candles_3m=candles_3m,
-                    candles_5m=candles_5m,
-                    ticker=ticker,
-                    instrument=instrument,
-                    evidence=FastLaneEvidence(
-                        quote_timestamp_ms=quote_timestamp_ms,
-                        candidate_timestamp_ms=discovery.completed_at_ms,
-                        orderbook_timestamp_ms=min(fresh.observed_at_ms, geometry_now_ms),
-                        orderbook_imbalance=fresh.orderbook_imbalance,
-                        taker_pressure=fresh.taker_pressure,
-                        exchange_healthy=True,
-                        orderbook_healthy=True,
-                    ),
-                    now_ms=geometry_now_ms,
-                    strategy=strategy_params,
-                )
-                if not readiness.execution_ready:
+
+                for micro_round in range(1, DEMO_TEMPORAL_CONFIRMATION_ROUNDS + 1):
+                    if micro_round > 1:
+                        time.sleep(DEMO_TEMPORAL_CONFIRMATION_INTERVAL_SECONDS)
+                    ticker = public.get_ticker(candidate.symbol)
+                    quote_timestamp_ms = _now_ms()
+                    fresh = micro.get_evidence(candidate.symbol)
+                    geometry_now_ms = _now_ms()
+                    readiness = evaluate_execution_readiness(
+                        candidate,
+                        candles_3m=candles_3m,
+                        candles_5m=candles_5m,
+                        ticker=ticker,
+                        instrument=instrument,
+                        evidence=FastLaneEvidence(
+                            quote_timestamp_ms=quote_timestamp_ms,
+                            candidate_timestamp_ms=discovery.completed_at_ms,
+                            orderbook_timestamp_ms=min(fresh.observed_at_ms, geometry_now_ms),
+                            orderbook_imbalance=fresh.orderbook_imbalance,
+                            taker_pressure=fresh.taker_pressure,
+                            exchange_healthy=True,
+                            orderbook_healthy=True,
+                        ),
+                        now_ms=geometry_now_ms,
+                        strategy=strategy_params,
+                    )
+                    if readiness.execution_ready:
+                        break
+                    readiness_rejections.append(
+                        {
+                            "symbol": candidate.symbol,
+                            "direction": candidate.direction.value,
+                            "micro_round": micro_round,
+                            "promoted_watch": DEMO_ACQUISITION_REASON in candidate.reasons,
+                            "reasons": list(readiness.reasons),
+                            "orderbook_imbalance": str(fresh.orderbook_imbalance),
+                            "taker_pressure": str(fresh.taker_pressure),
+                        }
+                    )
+                    if not should_retry_demo_temporal_confirmation(
+                        candidate,
+                        readiness,
+                        round_index=micro_round,
+                    ):
+                        break
+
+                if readiness is None or not readiness.execution_ready:
                     continue
 
                 signal_id = linkage.save_execution_ready_signal(
@@ -354,6 +382,7 @@ def run_funding_oi_cycle() -> FundingOiCycleResult:
         account_blockers=account_blockers,
         execution_error=execution_error,
         live_trading_locked=True,
+        readiness_rejections=tuple(readiness_rejections),
     )
 
 
