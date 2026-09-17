@@ -29,7 +29,14 @@ from crypto_scanner.execution_plan import (
     TestnetExecutionArm,
     build_entry_order_plan,
 )
-from crypto_scanner.fast_lane import FastLaneEvidence, evaluate_execution_readiness
+from crypto_scanner.fast_lane import (
+    DEMO_TEMPORAL_CONFIRMATION_INTERVAL_SECONDS,
+    DEMO_TEMPORAL_CONFIRMATION_ROUNDS,
+    FastLaneEvidence,
+    ReadinessDecision,
+    evaluate_execution_readiness,
+    should_retry_demo_temporal_confirmation,
+)
 from crypto_scanner.funding_oi_demo import (
     FUNDING_OI_STRATEGY_ID,
     FundingOiLeg,
@@ -37,7 +44,7 @@ from crypto_scanner.funding_oi_demo import (
     filter_funding_oi_candidates,
 )
 from crypto_scanner.funding_oi_state import roll_daily_oi_snapshot
-from crypto_scanner.hot_watch import select_hot_candidates
+from crypto_scanner.hot_watch import DEMO_ACQUISITION_REASON, select_hot_candidates
 from crypto_scanner.lifecycle import recover_authoritative_state
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.safety import SafetyContract
