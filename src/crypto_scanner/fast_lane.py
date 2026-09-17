@@ -26,6 +26,11 @@ _DEMO_TECHNICAL_FIRST_REASON = "DEMO_TECHNICAL_FIRST_15M_MICRO_SOFT_CONFIRMATION
 _DEMO_TECHNICAL_SCALP_GEOMETRY_REASON = "DEMO_TECHNICAL_15M_SCALP_GEOMETRY"
 _DEMO_TEMPORAL_WINDOW = 3
 _DEMO_TEMPORAL_REQUIRED_SUPPORT = 2
+DEMO_TEMPORAL_CONFIRMATION_ROUNDS = _DEMO_TEMPORAL_WINDOW
+DEMO_TEMPORAL_CONFIRMATION_INTERVAL_SECONDS = 15.0
+_DEMO_TEMPORAL_RETRY_REASONS = frozenset(
+    {"ORDERBOOK_NOT_ALIGNED", "TAKER_PRESSURE_NOT_ALIGNED"}
+)
 _DEMO_TECHNICAL_SCORE_FLOOR = Decimal("50")
 _DEMO_TECHNICAL_MIN_COVERAGE = Decimal("0.72")
 _DEMO_STRONGLY_ADVERSE_MICRO_THRESHOLD = Decimal("0.20")
@@ -165,6 +170,27 @@ def _demo_temporal_enabled(candidate: DiscoveryResult) -> bool:
         os.getenv("CRYPTO_SCANNER_TESTNET_EXECUTION", "").strip().upper() == "ENABLED"
     )
     return execution_enabled and _DEMO_ACQUISITION_REASON in candidate.reasons
+
+
+def should_retry_demo_temporal_confirmation(
+    candidate: DiscoveryResult,
+    decision: ReadinessDecision,
+    *,
+    round_index: int,
+) -> bool:
+    """Allow only bounded retries for process-local Demo temporal confirmation.
+
+    A retry is permitted only for promoted Demo WATCH candidates whose rejection
+    consists exclusively of orderbook/taker alignment. Any stale-data, spread,
+    geometry, chase, RR, account, or other hard failure remains immediately
+    fail-closed.
+    """
+    return (
+        _demo_temporal_enabled(candidate)
+        and 1 <= round_index < DEMO_TEMPORAL_CONFIRMATION_ROUNDS
+        and bool(decision.reasons)
+        and set(decision.reasons).issubset(_DEMO_TEMPORAL_RETRY_REASONS)
+    )
 
 
 def _micro_value_valid(value: Decimal | None) -> bool:
