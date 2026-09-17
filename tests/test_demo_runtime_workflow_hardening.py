@@ -26,3 +26,13 @@ def test_non_scheduled_non_continuous_run_is_single_cycle():
     )
     assert condition in text
     assert "total_cycles=1" in text
+
+
+def test_volatility_breakout_is_rechecked_every_acquisition_cycle():
+    text = Path(".github/workflows/demo-scanner-runtime.yml").read_text()
+    vol = "strategy-vol-breakout-30-15-vt20-v1"
+    funding = "strategy-funding-z2-oi2-v1"
+    hourly_gate = 'if [ "${cycle}" -eq 1 ]; then'
+    assert text.count(vol) == 1
+    assert text.index(vol) < text.index(hourly_gate)
+    assert text.index(funding) > text.index(hourly_gate)
