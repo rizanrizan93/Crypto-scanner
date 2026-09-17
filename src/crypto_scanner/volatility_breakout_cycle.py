@@ -18,6 +18,7 @@ from crypto_scanner.binance.private_write import (
 )
 from crypto_scanner.binance.public_rest import BinanceDemoPublicRestClient
 from crypto_scanner.config import load_runtime_config
+from crypto_scanner.discovery import DiscoveryResult
 from crypto_scanner.discovery_pipeline import DiscoveryPipeline, MicrostructureSnapshot
 from crypto_scanner.durable_execution import DurableExecutionCoordinator, DurableExecutionError
 from crypto_scanner.execution_plan import (
@@ -25,8 +26,12 @@ from crypto_scanner.execution_plan import (
     TestnetExecutionArm,
     build_entry_order_plan,
 )
-from crypto_scanner.fast_lane import FastLaneEvidence, evaluate_execution_readiness
-from crypto_scanner.hot_watch import select_hot_candidates
+from crypto_scanner.fast_lane import (
+    FastLaneEvidence,
+    ReadinessDecision,
+    evaluate_execution_readiness,
+)
+from crypto_scanner.hot_watch import DEMO_ACQUISITION_REASON, select_hot_candidates
 from crypto_scanner.lifecycle import recover_authoritative_state
 from crypto_scanner.persistence import PersistenceError, SupabasePersistenceConfig
 from crypto_scanner.safety import SafetyContract
@@ -46,6 +51,11 @@ from crypto_scanner.volatility_breakout_demo import (
 )
 
 PARALLEL_FORWARD_DEMO_STAGE = "FORWARD_DEMO_PARALLEL"
+VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS = 3
+VOL_BREAKOUT_MICRO_CONFIRMATION_INTERVAL_SECONDS = 15.0
+_TEMPORAL_RETRY_REASONS = frozenset(
+    {"ORDERBOOK_NOT_ALIGNED", "TAKER_PRESSURE_NOT_ALIGNED"}
+)
 
 
 class VolatilityBreakoutCycleError(RuntimeError):
@@ -69,6 +79,7 @@ class VolatilityBreakoutCycleResult:
     account_blockers: tuple[str, ...]
     execution_error: str | None
     live_trading_locked: bool
+    readiness_rejections: tuple[dict[str, object], ...] = ()
 
 
 def _now_ms() -> int:
@@ -77,6 +88,28 @@ def _now_ms() -> int:
 
 def _leg_label(leg: VolatilityBreakoutLeg) -> str:
     return f"{leg.symbol}:{leg.direction.value}:{leg.target_weight}"
+
+
+def _should_retry_temporal_microstructure(
+    candidate: DiscoveryResult,
+    decision: ReadinessDecision,
+    *,
+    round_index: int,
+) -> bool:
+    """Retry only the bounded Demo temporal-confirmation path.
+
+    The temporal 2-of-3 microstructure gate stores its short history in-process.
+    A strategy-pool cycle is a fresh Python process, so evaluating only once per
+    five-minute acquisition cycle can never satisfy that gate for promoted WATCH
+    candidates. Keep all hard guards unchanged and take up to three fresh snapshots
+    in the same process only when rejection is exclusively micro-alignment related.
+    """
+    return (
+        DEMO_ACQUISITION_REASON in candidate.reasons
+        and round_index < VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS
+        and bool(decision.reasons)
+        and set(decision.reasons).issubset(_TEMPORAL_RETRY_REASONS)
+    )
 
 
 def _scope_discovery_to_active_symbols(results, active_symbols: frozenset[str]):
@@ -114,6 +147,7 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
     execution_error: str | None = None
     eligible_symbols: tuple[str, ...] = ()
     account_blockers: tuple[str, ...] = ()
+    readiness_rejections: list[dict[str, object]] = []
 
     with (
         BinanceDemoPublicRestClient(base_url=runtime.binance_rest_url) as public,
@@ -206,29 +240,59 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
                 instrument = public.get_instrument(candidate.symbol)
                 candles_3m = public.get_klines(candidate.symbol, "3", limit=200)
                 candles_5m = public.get_klines(candidate.symbol, "5", limit=200)
-                ticker = public.get_ticker(candidate.symbol)
-                quote_timestamp_ms = _now_ms()
-                fresh = micro.get_evidence(candidate.symbol)
+                readiness: ReadinessDecision | None = None
                 now_ms = _now_ms()
-                readiness = evaluate_execution_readiness(
-                    candidate,
-                    candles_3m=candles_3m,
-                    candles_5m=candles_5m,
-                    ticker=ticker,
-                    instrument=instrument,
-                    evidence=FastLaneEvidence(
-                        quote_timestamp_ms=quote_timestamp_ms,
-                        candidate_timestamp_ms=discovery.completed_at_ms,
-                        orderbook_timestamp_ms=min(fresh.observed_at_ms, now_ms),
-                        orderbook_imbalance=fresh.orderbook_imbalance,
-                        taker_pressure=fresh.taker_pressure,
-                        exchange_healthy=True,
-                        orderbook_healthy=True,
-                    ),
-                    now_ms=now_ms,
-                    strategy=strategy_params,
-                )
-                if not readiness.execution_ready:
+
+                for micro_round in range(1, VOL_BREAKOUT_MICRO_CONFIRMATION_ROUNDS + 1):
+                    if micro_round > 1:
+                        time.sleep(VOL_BREAKOUT_MICRO_CONFIRMATION_INTERVAL_SECONDS)
+                    # Quote and microstructure are fetched together on every bounded
+                    # confirmation round so the strict 2-second freshness contract
+                    # remains authoritative.
+                    ticker = public.get_ticker(candidate.symbol)
+                    quote_timestamp_ms = _now_ms()
+                    fresh = micro.get_evidence(candidate.symbol)
+                    now_ms = _now_ms()
+                    readiness = evaluate_execution_readiness(
+                        candidate,
+                        candles_3m=candles_3m,
+                        candles_5m=candles_5m,
+                        ticker=ticker,
+                        instrument=instrument,
+                        evidence=FastLaneEvidence(
+                            quote_timestamp_ms=quote_timestamp_ms,
+                            candidate_timestamp_ms=discovery.completed_at_ms,
+                            orderbook_timestamp_ms=min(fresh.observed_at_ms, now_ms),
+                            orderbook_imbalance=fresh.orderbook_imbalance,
+                            taker_pressure=fresh.taker_pressure,
+                            exchange_healthy=True,
+                            orderbook_healthy=True,
+                        ),
+                        now_ms=now_ms,
+                        strategy=strategy_params,
+                    )
+                    if readiness.execution_ready:
+                        break
+
+                    readiness_rejections.append(
+                        {
+                            "symbol": candidate.symbol,
+                            "direction": candidate.direction.value,
+                            "micro_round": micro_round,
+                            "promoted_watch": DEMO_ACQUISITION_REASON in candidate.reasons,
+                            "reasons": list(readiness.reasons),
+                            "orderbook_imbalance": str(fresh.orderbook_imbalance),
+                            "taker_pressure": str(fresh.taker_pressure),
+                        }
+                    )
+                    if not _should_retry_temporal_microstructure(
+                        candidate,
+                        readiness,
+                        round_index=micro_round,
+                    ):
+                        break
+
+                if readiness is None or not readiness.execution_ready:
                     continue
 
                 signal_id = linkage.save_execution_ready_signal(
@@ -315,6 +379,7 @@ def run_volatility_breakout_cycle() -> VolatilityBreakoutCycleResult:
         account_blockers=account_blockers,
         execution_error=execution_error,
         live_trading_locked=True,
+        readiness_rejections=tuple(readiness_rejections),
     )
 
 
