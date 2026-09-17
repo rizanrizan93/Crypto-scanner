@@ -110,16 +110,22 @@ jobs:
               strategy-regime-specialist-28d25-v1 || protect_and_fail
             CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
 
-            # D1 challenger lanes are evaluated once per hourly acquisition window.
-            # Their daily signal state remains fixed, while hourly microstructure can
-            # decide whether an eligible daily leg is actually safe to enter.
-            if [ "${cycle}" -eq 1 ]; then
-              echo "--- Volatility Breakout 30/15 VT20 ---"
-              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
-                python -m crypto_scanner.strategy_pool_cycle \
-                strategy-vol-breakout-30-15-vt20-v1 || protect_and_fail
-              CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
+            # The D1 volatility-breakout leg is stable for the day, but its
+            # microstructure entry gate is intraday. Re-evaluate the already-active
+            # leg on every five-minute acquisition cycle so a safe retest/trigger is
+            # not missed merely because it did not occur in the first cycle of the
+            # hourly window. Existing symbol exposure and durable execution dedupe
+            # remain authoritative, so this increases observation opportunity rather
+            # than relaxing entry/risk thresholds.
+            echo "--- Volatility Breakout 30/15 VT20 ---"
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
+              python -m crypto_scanner.strategy_pool_cycle \
+              strategy-vol-breakout-30-15-vt20-v1 || protect_and_fail
+            CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED crypto-scanner-profit-lock-watch
 
+            # Funding/OI is an hourly signal lane and remains once per acquisition
+            # window to avoid redundant external-data work.
+            if [ "${cycle}" -eq 1 ]; then
               echo "--- Funding Z2 + OI expansion >=2% ---"
               CRYPTO_SCANNER_TESTNET_EXECUTION=ENABLED \
                 python -m crypto_scanner.strategy_pool_cycle \
