@@ -349,6 +349,50 @@ class DurableTradeLinkage:
             on_conflict=("symbol", "venue_trade_id"),
         )
 
+    def reconcile_flat_symbol_persistence(
+        self,
+        symbol: str,
+        *,
+        observed_at_ms: int,
+    ) -> tuple[str, ...]:
+        """Retire stale durable OPEN rows only after the exchange proves the symbol flat.
+
+        This is intentionally scoped to one symbol and is called immediately before a
+        new Demo entry.  It prevents a previously closed episode from colliding with
+        the partial unique index that permits only one OPEN row per venue/environment/
+        symbol.  Closed-trade reconstruction remains authoritative for exact exit PnL
+        and will later enrich the row with its real close evidence.
+        """
+        symbol = symbol.upper().strip()
+        if not symbol or not symbol.replace("_", "").isalnum():
+            raise PersistenceError("invalid symbol for flat persistence reconciliation")
+        rows = self._rest.select(
+            "positions",
+            params={
+                "select": "position_id",
+                "venue": "eq.BINANCE",
+                "environment": "eq.DEMO",
+                "symbol": f"eq.{symbol}",
+                "state": "eq.OPEN",
+            },
+        )
+        retired: list[str] = []
+        for row in rows:
+            position_id = row.get("position_id")
+            if not isinstance(position_id, str) or not position_id:
+                raise PersistenceError("stale OPEN position row has invalid identity")
+            self._rest.patch(
+                "positions",
+                filters={"position_id": f"eq.{position_id}", "state": "eq.OPEN"},
+                values={
+                    "state": "CLOSED",
+                    "remaining_qty": Decimal(0),
+                    "updated_at_ms": observed_at_ms,
+                },
+            )
+            retired.append(position_id)
+        return tuple(retired)
+
     def save_open_position(
         self,
         *,
