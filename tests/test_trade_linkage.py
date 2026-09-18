@@ -163,3 +163,38 @@ def test_resolve_context_requires_complete_signal_geometry_chain() -> None:
     assert context.setup == "HL_PULLBACK"
     assert context.regime == "TREND"
     assert context.calibration_eligible
+
+
+def test_reconcile_flat_symbol_persistence_retires_stale_open_episode() -> None:
+    position_id = stable_position_id_from_episode("BNBUSDT", "LONG", 3_000_000)
+    patches: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/positions"):
+            assert request.url.params["venue"] == "eq.BINANCE"
+            assert request.url.params["environment"] == "eq.DEMO"
+            assert request.url.params["symbol"] == "eq.BNBUSDT"
+            assert request.url.params["state"] == "eq.OPEN"
+            return httpx.Response(200, json=[{"position_id": position_id}])
+        if request.method == "PATCH" and request.url.path.endswith("/positions"):
+            patches.append(json.loads(request.read().decode()))
+            assert request.url.params["position_id"] == f"eq.{position_id}"
+            assert request.url.params["state"] == "eq.OPEN"
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request {request.method} {request.url.path}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        linkage = DurableTradeLinkage(_config(), client=client)
+        retired = linkage.reconcile_flat_symbol_persistence(
+            "bnbusdt",
+            observed_at_ms=3_100_000,
+        )
+
+    assert retired == (position_id,)
+    assert patches == [
+        {
+            "state": "CLOSED",
+            "remaining_qty": "0",
+            "updated_at_ms": 3_100_000,
+        }
+    ]
