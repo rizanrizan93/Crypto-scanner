@@ -78,3 +78,29 @@ def test_runtime_watchdog_rest_query_is_bounded_to_required_components() -> None
 def test_runtime_watchdog_rejects_malformed_rows() -> None:
     with pytest.raises(PersistenceError, match="malformed"):
         evaluate_runtime_health(({"component": "SCANNER_CYCLE"},), now_ms=1)
+
+
+def test_runtime_watchdog_budgets_cover_schedule_and_runtime_jitter() -> None:
+    budgets = {policy.component: policy.max_age_seconds for policy in DEFAULT_POLICIES}
+
+    assert budgets["SCANNER_CYCLE"] == 150 * 60
+    assert budgets["TRAJECTORY_CYCLE"] == 75 * 60
+    assert budgets["CALIBRATION_CYCLE"] == 9 * 60 * 60
+    assert budgets["PROMOTION_CYCLE"] == 3 * 60 * 60
+
+
+def test_runtime_watchdog_does_not_false_alarm_inside_schedule_aware_budget() -> None:
+    now_ms = 20_000_000
+    rows = tuple(
+        {
+            "component": policy.component,
+            "observed_at_ms": now_ms - (policy.max_age_seconds - 60) * 1_000,
+            "status": "SUCCESS",
+        }
+        for policy in DEFAULT_POLICIES
+    )
+
+    report = evaluate_runtime_health(rows, now_ms=now_ms)
+
+    assert report.healthy
+    assert all(item.reason == "HEALTHY" for item in report.components)
