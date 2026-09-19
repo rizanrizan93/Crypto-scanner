@@ -20,11 +20,15 @@ class ComponentPolicy:
     max_age_seconds: int
 
 
+# Freshness budgets must cover the producer schedule plus normal GitHub Actions
+# queue/runtime jitter.  The watchdog is a liveness alarm, not a cron synchronizer:
+# setting a budget equal to the nominal cadence creates false failures whenever a
+# scheduled run is delayed or an hourly scanner is still inside its bounded window.
 DEFAULT_POLICIES = (
-    ComponentPolicy("SCANNER_CYCLE", 90 * 60),
-    ComponentPolicy("TRAJECTORY_CYCLE", 45 * 60),
-    ComponentPolicy("CALIBRATION_CYCLE", 8 * 60 * 60),
-    ComponentPolicy("PROMOTION_CYCLE", 2 * 60 * 60),
+    ComponentPolicy("SCANNER_CYCLE", 150 * 60),
+    ComponentPolicy("TRAJECTORY_CYCLE", 75 * 60),
+    ComponentPolicy("CALIBRATION_CYCLE", 9 * 60 * 60),
+    ComponentPolicy("PROMOTION_CYCLE", 3 * 60 * 60),
 )
 
 
