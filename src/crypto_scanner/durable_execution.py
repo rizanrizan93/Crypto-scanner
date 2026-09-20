@@ -296,6 +296,19 @@ class DurableExecutionCoordinator:
 
         wallet = self.private.get_wallet_balance()
         positions = self.private.get_positions()
+        symbol = readiness.geometry.symbol.upper()
+        if any(position.is_open and position.symbol == symbol for position in positions):
+            raise DurableExecutionError(
+                "authoritative exchange position already exists for entry symbol"
+            )
+
+        # Binance is authoritative for exposure.  If it proves this symbol flat,
+        # retire any stale durable OPEN episode before a new order can be submitted.
+        # This prevents a post-fill 23505 collision on ux_positions_one_open_symbol.
+        self.linkage.reconcile_flat_symbol_persistence(
+            symbol,
+            observed_at_ms=self.now_ms(),
+        )
         try:
             plan = build_entry_order_plan(
                 readiness,
@@ -324,6 +337,22 @@ class DurableExecutionCoordinator:
             created_at_ms=planned_at_ms,
             updated_at_ms=planned_at_ms,
         )
+
+        # Final exchange-side compare immediately before the write.  Persistence is
+        # never allowed to authorize an entry when Binance already has symbol exposure.
+        pre_submit_positions = self.private.get_positions()
+        if any(
+            position.is_open and position.symbol == plan.symbol
+            for position in pre_submit_positions
+        ):
+            self.linkage.save_entry_plan(
+                plan,
+                status="BLOCKED_POSITION_RACE",
+                updated_at_ms=self.now_ms(),
+            )
+            raise DurableExecutionError(
+                "authoritative exchange position appeared before entry submission"
+            )
 
         try:
             ack = self.writer.submit_entry(plan)
