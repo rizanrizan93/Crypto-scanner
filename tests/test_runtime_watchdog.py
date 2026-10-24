@@ -105,7 +105,13 @@ def test_runtime_watchdog_does_not_false_alarm_inside_schedule_aware_budget() ->
     report = evaluate_runtime_health(rows, now_ms=now_ms)
 
     assert report.healthy
-    assert all(item.reason == "HEALTHY" for item in report.components)
+    assert all(item.healthy for item in report.components)
+    assert report.components[1].reason == "LATE_WITHIN_SCHEDULE_GRACE"
+    assert all(
+        item.reason == "HEALTHY"
+        for item in report.components
+        if item.component != "TRAJECTORY_CYCLE"
+    )
 
 
 def test_trajectory_delayed_95_minutes_reports_warning_not_failed_run() -> None:
