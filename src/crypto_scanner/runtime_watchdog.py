@@ -18,6 +18,7 @@ _MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
 class ComponentPolicy:
     component: str
     max_age_seconds: int
+    warning_age_seconds: int | None = None
 
 
 # Freshness budgets must cover the producer schedule plus normal GitHub Actions
@@ -26,7 +27,10 @@ class ComponentPolicy:
 # scheduled run is delayed or an hourly scanner is still inside its bounded window.
 DEFAULT_POLICIES = (
     ComponentPolicy("SCANNER_CYCLE", 150 * 60),
-    ComponentPolicy("TRAJECTORY_CYCLE", 75 * 60),
+    # GitHub Actions may skip/delay scheduled research cycles substantially.
+    # Keep a visible lateness warning after 75m but fail closed after 120m.
+    # FAILED/BLOCKED heartbeats still fail immediately, regardless of age.
+    ComponentPolicy("TRAJECTORY_CYCLE", 120 * 60, warning_age_seconds=75 * 60),
     ComponentPolicy("CALIBRATION_CYCLE", 9 * 60 * 60),
     ComponentPolicy("PROMOTION_CYCLE", 3 * 60 * 60),
 )
@@ -129,6 +133,14 @@ def evaluate_runtime_health(
             healthy, reason = False, f"UNHEALTHY_STATUS_{status or 'EMPTY'}"
         elif age_ms > policy.max_age_seconds * 1000:
             healthy, reason = False, "STALE_HEARTBEAT"
+        elif (
+            policy.warning_age_seconds is not None
+            and age_ms > policy.warning_age_seconds * 1000
+        ):
+            # A delayed research producer is recorded as late, not silently
+            # ignored. This bounded grace avoids false failed-job emails from
+            # GitHub Actions schedule jitter without hiding a sustained outage.
+            healthy, reason = True, "LATE_WITHIN_SCHEDULE_GRACE"
         else:
             healthy, reason = True, "HEALTHY"
         results.append(
