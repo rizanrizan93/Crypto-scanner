@@ -84,7 +84,9 @@ def test_runtime_watchdog_budgets_cover_schedule_and_runtime_jitter() -> None:
     budgets = {policy.component: policy.max_age_seconds for policy in DEFAULT_POLICIES}
 
     assert budgets["SCANNER_CYCLE"] == 150 * 60
-    assert budgets["TRAJECTORY_CYCLE"] == 75 * 60
+    assert budgets["TRAJECTORY_CYCLE"] == 120 * 60
+    trajectory = next(p for p in DEFAULT_POLICIES if p.component == "TRAJECTORY_CYCLE")
+    assert trajectory.warning_age_seconds == 75 * 60
     assert budgets["CALIBRATION_CYCLE"] == 9 * 60 * 60
     assert budgets["PROMOTION_CYCLE"] == 3 * 60 * 60
 
@@ -103,4 +105,52 @@ def test_runtime_watchdog_does_not_false_alarm_inside_schedule_aware_budget() ->
     report = evaluate_runtime_health(rows, now_ms=now_ms)
 
     assert report.healthy
-    assert all(item.reason == "HEALTHY" for item in report.components)
+    assert all(item.healthy for item in report.components)
+    assert report.components[1].reason == "LATE_WITHIN_SCHEDULE_GRACE"
+    assert all(
+        item.reason == "HEALTHY"
+        for item in report.components
+        if item.component != "TRAJECTORY_CYCLE"
+    )
+
+
+def test_trajectory_delayed_95_minutes_reports_warning_not_failed_run() -> None:
+    """The incident had a 95-minute successful-but-delayed DEMO trajectory."""
+    now_ms = 100_000_000
+    rows = list(_rows(now_ms))
+    rows[1] = {
+        "component": "TRAJECTORY_CYCLE",
+        "observed_at_ms": now_ms - 95 * 60_000,
+        "status": "SUCCESS",
+    }
+    report = evaluate_runtime_health(tuple(rows), now_ms=now_ms)
+    assert report.healthy
+    assert report.components[1].healthy
+    assert report.components[1].reason == "LATE_WITHIN_SCHEDULE_GRACE"
+
+
+def test_trajectory_over_two_hours_remains_critical() -> None:
+    now_ms = 100_000_000
+    rows = list(_rows(now_ms))
+    rows[1] = {
+        "component": "TRAJECTORY_CYCLE",
+        "observed_at_ms": now_ms - 121 * 60_000,
+        "status": "SUCCESS",
+    }
+    report = evaluate_runtime_health(tuple(rows), now_ms=now_ms)
+    assert not report.healthy
+    assert report.components[1].reason == "STALE_HEARTBEAT"
+
+
+@pytest.mark.parametrize("status", ["FAILED", "BLOCKED"])
+def test_trajectory_failure_is_not_suppressed_by_grace(status: str) -> None:
+    now_ms = 100_000_000
+    rows = list(_rows(now_ms))
+    rows[1] = {
+        "component": "TRAJECTORY_CYCLE",
+        "observed_at_ms": now_ms - 90 * 60_000,
+        "status": status,
+    }
+    report = evaluate_runtime_health(tuple(rows), now_ms=now_ms)
+    assert not report.healthy
+    assert report.components[1].reason == f"UNHEALTHY_STATUS_{status}"
